@@ -98,6 +98,15 @@ def sidebar(pipeline: RAGPipeline) -> None:
         )
 
 
+def _extract_history(messages: list[dict], max_turns: int = 3) -> list[tuple[str, str]]:
+    """Pull the last few (question, answer) turns for conversational follow-ups."""
+    turns: list[tuple[str, str]] = []
+    for i in range(len(messages) - 1):
+        if messages[i]["role"] == "user" and messages[i + 1]["role"] == "assistant":
+            turns.append((messages[i]["content"], messages[i + 1]["content"]))
+    return turns[-max_turns:]
+
+
 def render_sources(sources) -> None:
     if not sources:
         return
@@ -112,7 +121,10 @@ def main() -> None:
     sidebar(pipeline)
 
     st.title("Domain-Specific RAG Chatbot")
-    st.caption("Ask questions about the documents you've uploaded. Answers are grounded only in their content.")
+    st.caption(
+        "Ask questions about the documents you've uploaded. Answers are grounded only in "
+        "their content. Follow-up questions and pasted batches of questions are both supported."
+    )
 
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
@@ -124,13 +136,14 @@ def main() -> None:
 
     question = st.chat_input("Ask a question about your documents...")
     if question:
+        history = _extract_history(st.session_state.messages)
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
 
         with st.chat_message("assistant"):
             with st.spinner("Retrieving relevant passages and generating an answer..."):
-                answer = pipeline.ask(question)
+                answer = pipeline.ask(question, history=history)
             st.markdown(answer.text)
             render_sources(answer.sources)
             st.caption(f"⏱ {answer.response_time_seconds:.2f}s")

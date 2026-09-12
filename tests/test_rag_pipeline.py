@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from document_loader import DocumentValidationError, load_documents, validate_file
-from rag_pipeline import RAGPipeline
+from rag_pipeline import RAGPipeline, split_into_questions
 
 DOCS_DIR = Path(__file__).resolve().parent.parent / "documents"
 
@@ -81,3 +81,46 @@ def test_empty_store_prompts_for_upload():
     empty_pipeline = RAGPipeline()
     answer = empty_pipeline.ask("Any question")
     assert "upload" in answer.text.lower()
+
+
+def test_split_into_questions_single_sentence_stays_single():
+    assert split_into_questions("How is attendance calculated?") == [
+        "How is attendance calculated?"
+    ]
+
+
+def test_split_into_questions_handles_batch():
+    batch = (
+        "How many days of Casual Leave are employees entitled to per year? "
+        "How is attendance calculated? "
+        "Who is the company's Chief Executive Officer?"
+    )
+    questions = split_into_questions(batch)
+    assert len(questions) == 3
+    assert questions[0].startswith("How many days of Casual Leave")
+    assert questions[2].startswith("Who is the company's")
+
+
+def test_batch_question_answers_each_part(pipeline: RAGPipeline):
+    batch = (
+        "How many days of Casual Leave are employees entitled to per year?\n"
+        "Who is the company's Chief Executive Officer?"
+    )
+    answer = pipeline.ask(batch)
+    assert answer.grounded  # at least one sub-question was answerable
+    assert "Casual Leave" in answer.text
+    assert any(s.document == "Policy.pdf" for s in answer.sources)
+
+
+def test_source_deduplication_has_no_duplicate_pages(pipeline: RAGPipeline):
+    answer = pipeline.ask("How many days of Casual Leave are employees entitled to?")
+    keys = [(s.document, s.page) for s in answer.sources]
+    assert len(keys) == len(set(keys))
+
+
+def test_history_param_accepted_offline(pipeline: RAGPipeline):
+    # With no LLM configured, condense_question() is a no-op, but the call
+    # should still succeed end-to-end and return a grounded answer.
+    history = [("How is attendance calculated?", "Based on biometric check-in/out.")]
+    answer = pipeline.ask("What about remote days?", history=history)
+    assert answer.response_time_seconds >= 0

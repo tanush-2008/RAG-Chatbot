@@ -75,7 +75,7 @@ def _extractive_fallback(messages: list[dict]) -> str:
 
 
 PROVIDER_CALLERS = {
-    "groq": (_call_groq, "GROQ_API_KEY", "llama-3.3-70b-versatile"),
+    "groq": (_call_groq, "GROQ_API_KEY", "openai/gpt-oss-120b"),
     "openai": (_call_openai, "OPENAI_API_KEY", "gpt-4o-mini"),
     "gemini": (_call_gemini, "GEMINI_API_KEY", "gemini-2.0-flash"),
 }
@@ -98,3 +98,51 @@ def call_llm(messages: list[dict], provider: str | None = None, model: str | Non
         return caller(messages, resolved_model, api_key)
     except Exception as exc:
         raise LLMError(f"{provider} request failed: {exc}") from exc
+
+
+def is_llm_configured(provider: str | None = None) -> bool:
+    """Whether a real LLM (not the extractive fallback) is available to call."""
+    provider = (provider or os.getenv("LLM_PROVIDER", "groq")).lower()
+    if provider not in PROVIDER_CALLERS:
+        return False
+    _, key_env_var, _ = PROVIDER_CALLERS[provider]
+    return bool(os.getenv(key_env_var))
+
+
+def condense_question(
+    question: str,
+    history: list[tuple[str, str]],
+    provider: str | None = None,
+    model: str | None = None,
+) -> str:
+    """Rewrite a follow-up question into a standalone one using recent chat history.
+
+    Used only to build a better retrieval query; the original question (plus the
+    raw history) is still what's sent to the LLM for the final answer, so the
+    conversational tone of the reply is unaffected. Falls back to the original
+    question unchanged if no LLM is configured (offline/extractive mode).
+    """
+    if not history or not is_llm_configured(provider):
+        return question
+
+    history_text = "\n".join(f"User: {q}\nAssistant: {a}" for q, a in history[-3:])
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Rewrite the follow-up question as a fully standalone question "
+                "that includes any context implied by the conversation history "
+                "(e.g. resolve pronouns like 'it' or 'that'). Return ONLY the "
+                "rewritten question, with no explanation or quotation marks."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Conversation history:\n{history_text}\n\nFollow-up question: {question}",
+        },
+    ]
+    try:
+        rewritten = call_llm(messages, provider=provider, model=model).strip().strip('"')
+        return rewritten or question
+    except LLMError:
+        return question

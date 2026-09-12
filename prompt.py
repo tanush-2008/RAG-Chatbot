@@ -32,8 +32,23 @@ def format_context(chunks: list[Chunk]) -> str:
     return "\n\n".join(blocks)
 
 
-def build_messages(question: str, chunks: list[Chunk]) -> list[dict]:
-    """Build the chat messages (system + user) sent to the LLM."""
+def build_messages(
+    question: str,
+    chunks: list[Chunk],
+    history: list[tuple[str, str]] | None = None,
+) -> list[dict]:
+    """Build the chat messages (system + prior turns + user) sent to the LLM.
+
+    `history` is prior (question, answer) turns from this session, most recent
+    last, used only so follow-up questions ("what about X instead?") read
+    naturally - the grounding rule in SYSTEM_PROMPT still applies to every turn.
+    """
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    for prior_question, prior_answer in (history or [])[-3:]:
+        messages.append({"role": "user", "content": prior_question})
+        messages.append({"role": "assistant", "content": prior_answer})
+
     context = format_context(chunks) if chunks else "(no relevant context was retrieved)"
     user_prompt = (
         f"Context:\n{context}\n\n"
@@ -41,7 +56,5 @@ def build_messages(question: str, chunks: list[Chunk]) -> list[dict]:
         "Answer using only the context above. Cite the source document and page "
         "number(s) you used."
     )
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
+    messages.append({"role": "user", "content": user_prompt})
+    return messages
