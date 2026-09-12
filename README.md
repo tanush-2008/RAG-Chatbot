@@ -108,10 +108,20 @@ Run the automated pytest suite (fully offline, no API key needed):
 python -m pytest tests/ -v
 ```
 
-`tests/test_questions.csv` is a 19-question manual evaluation sheet covering
+`tests/test_questions.csv` is a 19-question evaluation sheet covering
 correct, incorrect, and unavailable questions, per the project's testing
 methodology (retrieval accuracy, groundedness, refusal quality, source
-quality).
+quality). Run it automatically against the real pipeline (needs an LLM key
+configured) with:
+
+```bash
+python tests/evaluate.py
+```
+
+This grades every question against its expected source/refusal, writes
+`tests/evaluation_results.csv`, and prints a summary (retrieval accuracy,
+refusal accuracy, average response time) - a checked-in run currently scores
+19/19 (100%).
 
 ## Responsible AI & Security
 
