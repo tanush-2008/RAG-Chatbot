@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import BinaryIO, Iterable, Union
 
 from pypdf import PdfReader
+
+import ocr
 
 MAX_FILE_SIZE_MB = 25
 ALLOWED_EXTENSIONS = (".pdf",)
@@ -23,6 +25,7 @@ class PageDocument:
     text: str
     source: str
     page: int  # 1-indexed page number
+    via_ocr: bool = field(default=False)
 
 
 def validate_file(filename: str, size_bytes: int) -> None:
@@ -44,13 +47,23 @@ def validate_file(filename: str, size_bytes: int) -> None:
         raise DocumentValidationError(f"'{filename}' is empty.")
 
 
-def extract_pages(file_obj: Union[BinaryIO, bytes], source_name: str) -> list[PageDocument]:
+def extract_pages(
+    file_obj: Union[BinaryIO, bytes], source_name: str, enable_ocr: bool = False
+) -> list[PageDocument]:
     """Read every page of a PDF, skipping empty pages, and keep page metadata.
 
     file_obj can be a file-like object (e.g. Streamlit's UploadedFile) or raw bytes.
+
+    If `enable_ocr` is set and a page has no extractable text (a scanned or
+    image-only page), falls back to OCR (ocr.py) - which itself degrades to a
+    no-op if the Tesseract binary isn't installed, so this is always safe to
+    pass even when OCR isn't set up.
     """
     if isinstance(file_obj, (bytes, bytearray)):
-        file_obj = io.BytesIO(file_obj)
+        raw_bytes = bytes(file_obj)
+    else:
+        raw_bytes = file_obj.read()
+    file_obj = io.BytesIO(raw_bytes)
 
     pages: list[PageDocument] = []
     try:
@@ -62,17 +75,24 @@ def extract_pages(file_obj: Union[BinaryIO, bytes], source_name: str) -> list[Pa
         try:
             text = page.extract_text() or ""
         except Exception:
-            # Corrupt or image-only page - skip safely instead of crashing the whole upload.
-            continue
+            text = ""
         text = text.strip()
+
+        via_ocr = False
+        if not text and enable_ocr:
+            text = ocr.ocr_pdf_page(raw_bytes, page_number).strip()
+            via_ocr = bool(text)
+
         if not text:
             continue
-        pages.append(PageDocument(text=text, source=source_name, page=page_number))
+        pages.append(PageDocument(text=text, source=source_name, page=page_number, via_ocr=via_ocr))
 
     return pages
 
 
-def load_documents(files: Iterable[tuple[str, Union[BinaryIO, bytes], int]]) -> list[PageDocument]:
+def load_documents(
+    files: Iterable[tuple[str, Union[BinaryIO, bytes], int]], enable_ocr: bool = False
+) -> list[PageDocument]:
     """Validate and extract text from a batch of uploaded files.
 
     Each item in `files` is (filename, file_obj, size_bytes).
@@ -82,5 +102,5 @@ def load_documents(files: Iterable[tuple[str, Union[BinaryIO, bytes], int]]) -> 
     all_pages: list[PageDocument] = []
     for filename, file_obj, size_bytes in files:
         validate_file(filename, size_bytes)
-        all_pages.extend(extract_pages(file_obj, filename))
+        all_pages.extend(extract_pages(file_obj, filename, enable_ocr=enable_ocr))
     return all_pages

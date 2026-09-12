@@ -37,6 +37,7 @@ class Source:
     document: str
     page: int
     score: float
+    via_ocr: bool = False
 
 
 @dataclass
@@ -85,12 +86,16 @@ class RAGPipeline:
         self.vector_store = VectorStore()
         self.processed_files: list[str] = []
 
-    def process_documents(self, files: list[tuple[str, bytes, int]]) -> int:
+    def process_documents(self, files: list[tuple[str, bytes, int]], enable_ocr: bool = False) -> int:
         """Validate, extract, chunk, embed, and index a batch of uploaded PDFs.
+
+        `enable_ocr` turns on the OCR fallback (ocr.py) for scanned/image-only
+        pages that have no extractable text; it's a no-op if the Tesseract
+        binary isn't installed on the host.
 
         Returns the number of chunks added. Raises DocumentValidationError on bad input.
         """
-        pages = load_documents(files)
+        pages = load_documents(files, enable_ocr=enable_ocr)
         chunks = chunk_documents(pages, self.chunk_size, self.chunk_overlap)
         self.vector_store.add(chunks)
         self.processed_files.extend(name for name, _, _ in files)
@@ -227,5 +232,7 @@ class RAGPipeline:
         for chunk, score in relevant:
             key = (chunk.source, chunk.page)
             if key not in best or score > best[key].score:
-                best[key] = Source(document=chunk.source, page=chunk.page, score=score)
+                best[key] = Source(
+                    document=chunk.source, page=chunk.page, score=score, via_ocr=chunk.via_ocr
+                )
         return sorted(best.values(), key=lambda s: s.score, reverse=True)

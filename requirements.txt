@@ -12,3 +12,9 @@ google-genai>=0.3
 fastapi>=0.115
 uvicorn[standard]>=0.30
 python-multipart>=0.0.9
+
+# Optional advanced feature: OCR for scanned PDFs (ocr.py). Also requires the
+# Tesseract OCR engine installed separately on the host - see ocr.py.
+pytesseract>=0.3.10
+pypdfium2>=4.30
+Pillow>=10.0

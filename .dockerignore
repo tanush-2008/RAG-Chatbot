@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.pytest_cache/
+.streamlit/secrets.toml
+.env
+users.json
+test_users.json
+feedback/
+vector_store/saved_index/**
+!vector_store/saved_index/.gitkeep
+tests/evaluation_results.csv

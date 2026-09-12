@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from document_loader import DocumentValidationError
@@ -92,7 +92,9 @@ def clear_documents() -> dict:
 
 
 @app.post("/documents/upload", response_model=ProcessResponse, dependencies=[Depends(require_api_key)])
-async def upload_documents(files: list[UploadFile]) -> ProcessResponse:
+async def upload_documents(
+    files: list[UploadFile], enable_ocr: bool = Form(False)
+) -> ProcessResponse:
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded.")
 
@@ -102,7 +104,7 @@ async def upload_documents(files: list[UploadFile]) -> ProcessResponse:
         payload.append((f.filename, content, len(content)))
 
     try:
-        num_chunks = pipeline.process_documents(payload)
+        num_chunks = pipeline.process_documents(payload, enable_ocr=enable_ocr)
     except DocumentValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

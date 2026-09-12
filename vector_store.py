@@ -26,6 +26,7 @@ class Chunk:
     source: str
     page: int
     chunk_id: int = field(default=-1)
+    via_ocr: bool = field(default=False)
 
 
 def chunk_documents(
@@ -45,7 +46,9 @@ def chunk_documents(
         for piece in splitter.split_text(page.text):
             piece = piece.strip()
             if piece:
-                chunks.append(Chunk(text=piece, source=page.source, page=page.page))
+                chunks.append(
+                    Chunk(text=piece, source=page.source, page=page.page, via_ocr=page.via_ocr)
+                )
 
     for idx, chunk in enumerate(chunks):
         chunk.chunk_id = idx

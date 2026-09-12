@@ -1,0 +1,32 @@
+# Usage: docker compose up --build
+# (the api service is optional - comment it out if you only need the
+# Streamlit app; both share the requirements.txt / Dockerfile image but keep
+# separate named volumes so their vector stores never collide, matching the
+# per-purpose isolation used elsewhere in this project - see app.py's
+# per-user directories and api.py's own subdirectory)
+
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - rag_app_data:/app/vector_store/saved_index
+      - rag_feedback:/app/feedback
+
+  api:
+    build: .
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - rag_api_data:/app/vector_store/saved_index
+
+volumes:
+  rag_app_data:
+  rag_api_data:
+  rag_feedback:

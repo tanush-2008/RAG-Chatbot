@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import auth
+import ocr
 from document_loader import DocumentValidationError, MAX_FILE_SIZE_MB
 from feedback import log_feedback
 from rag_pipeline import RAGPipeline
@@ -105,6 +106,18 @@ def sidebar(pipeline: RAGPipeline, username: str) -> None:
             key="uploader",
         )
 
+        enable_ocr = st.checkbox(
+            "Enable OCR for scanned pages",
+            value=False,
+            help=(
+                "Optional extension for image-only/scanned PDF pages. "
+                "Requires the Tesseract OCR engine installed on the host "
+                "(see README) - has no effect otherwise."
+            ),
+        )
+        if enable_ocr and not ocr.is_available():
+            st.caption("⚠️ Tesseract isn't installed here, so OCR will be skipped.")
+
         col1, col2 = st.columns(2)
         with col1:
             process_clicked = st.button("Process Documents", type="primary", use_container_width=True)
@@ -120,7 +133,7 @@ def sidebar(pipeline: RAGPipeline, username: str) -> None:
                         (f.name, f.getvalue(), f.size) for f in uploaded_files
                     ]
                     try:
-                        num_chunks = pipeline.process_documents(files_payload)
+                        num_chunks = pipeline.process_documents(files_payload, enable_ocr=enable_ocr)
                         pipeline.save(str(store_dir))
                         st.session_state.uploaded_names.extend(
                             f.name for f in uploaded_files
@@ -179,7 +192,8 @@ def render_sources(sources) -> None:
         return
     with st.expander(f"📎 Sources ({len(sources)})"):
         for s in sources:
-            st.markdown(f"- **{s.document}**, page {s.page} (similarity: {s.score:.2f})")
+            ocr_tag = " 🔎 *(via OCR)*" if getattr(s, "via_ocr", False) else ""
+            st.markdown(f"- **{s.document}**, page {s.page} (similarity: {s.score:.2f}){ocr_tag}")
 
 
 def render_feedback(msg: dict) -> None:
