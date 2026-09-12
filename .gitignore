@@ -2,8 +2,8 @@
 .venv/
 __pycache__/
 *.pyc
-vector_store/saved_index/*.faiss
-vector_store/saved_index/*.pkl
+vector_store/saved_index/**/*.faiss
+vector_store/saved_index/**/*.pkl
 .streamlit/secrets.toml
 *.egg-info/
 .pytest_cache/

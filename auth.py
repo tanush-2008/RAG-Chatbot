@@ -25,7 +25,7 @@ import re
 import secrets
 from pathlib import Path
 
-USERS_FILE = Path(os.getenv("AUTH_USERS_FILE", "users.json"))
+USERS_FILE = Path(os.getenv("AUTH_USERS_FILE") or "users.json")
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
 PBKDF2_ITERATIONS = 260_000
 
