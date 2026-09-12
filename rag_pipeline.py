@@ -12,8 +12,22 @@ from prompt import NOT_FOUND_MESSAGE, build_messages
 from vector_store import Chunk, VectorStore, chunk_documents
 
 DEFAULT_TOP_K = 4
-MIN_RELEVANCE_SCORE = 0.15  # cosine similarity floor below which we treat retrieval as "no match"
 MAX_QUESTIONS_PER_MESSAGE = 10
+
+# Relevance thresholds are calibrated per embedding backend, since raw cosine
+# similarity scores from a real semantic model and the offline hashing
+# fallback (see embeddings.py) live in different ranges. Each entry is
+# (gate, support): `gate` is the minimum score the *top* retrieved chunk must
+# clear for the question to be considered in-scope at all (empirically, real
+# answerable questions score >=0.3 while off-topic ones top out around 0.23 -
+# see tests/generate_sample_pdfs.py-based calibration in the project notes);
+# `support` is the lower floor used to keep secondary chunks once the gate
+# has passed, so weaker-but-genuine supporting context isn't dropped.
+RELEVANCE_THRESHOLDS: dict[str, tuple[float, float]] = {
+    "sentence-transformers": (0.28, 0.20),
+    "hashing-fallback": (0.20, 0.12),
+}
+DEFAULT_RELEVANCE_THRESHOLD: tuple[float, float] = (0.25, 0.15)
 
 _LEADING_NUMBERING_RE = re.compile(r"^\s*(?:\d+[\.\)]|[-*])\s*")
 
@@ -92,22 +106,37 @@ class RAGPipeline:
     def load(self, directory: str) -> None:
         self.vector_store = VectorStore.load(directory)
 
-    def ask(self, question: str, history: list[tuple[str, str]] | None = None) -> Answer:
+    def ask(
+        self,
+        question: str,
+        history: list[tuple[str, str]] | None = None,
+        document_filter: set[str] | None = None,
+    ) -> Answer:
         """Answer a chat message, transparently handling batches of questions.
 
         `history` is prior (question, answer_text) turns from this session,
         most recent last - used to resolve follow-up questions ("what about
         paternity leave instead?") into a better retrieval query and to give
         the LLM conversational continuity.
+
+        `document_filter`, if given, restricts retrieval to that subset of
+        indexed document names (the "document filters" feature) - useful when
+        several unrelated PDFs are indexed and a question should only draw
+        from some of them.
         """
         questions = split_into_questions(question)
         if len(questions) == 1:
-            return self._ask_one(questions[0], history)
-        return self._ask_batch(questions, history)
+            return self._ask_one(questions[0], history, document_filter)
+        return self._ask_batch(questions, history, document_filter)
 
-    def _ask_batch(self, questions: list[str], history: list[tuple[str, str]] | None) -> Answer:
+    def _ask_batch(
+        self,
+        questions: list[str],
+        history: list[tuple[str, str]] | None,
+        document_filter: set[str] | None,
+    ) -> Answer:
         start = time.perf_counter()
-        sub_answers = [self._ask_one(q, history) for q in questions]
+        sub_answers = [self._ask_one(q, history, document_filter) for q in questions]
 
         text_parts = []
         combined_sources: dict[tuple[str, int], Source] = {}
@@ -128,7 +157,12 @@ class RAGPipeline:
             grounded=any_grounded,
         )
 
-    def _ask_one(self, question: str, history: list[tuple[str, str]] | None = None) -> Answer:
+    def _ask_one(
+        self,
+        question: str,
+        history: list[tuple[str, str]] | None = None,
+        document_filter: set[str] | None = None,
+    ) -> Answer:
         start = time.perf_counter()
 
         if self.vector_store.is_empty:
@@ -139,19 +173,32 @@ class RAGPipeline:
                 grounded=False,
             )
 
-        retrieval_query = condense_question(question, history or [])
-        results = self.vector_store.search(retrieval_query, top_k=self.top_k)
-        relevant: list[tuple[Chunk, float]] = [
-            (c, s) for c, s in results if s >= MIN_RELEVANCE_SCORE
-        ]
+        if document_filter is not None and not document_filter:
+            return Answer(
+                text="No documents are selected to search. Choose at least one in the sidebar filter.",
+                sources=[],
+                response_time_seconds=time.perf_counter() - start,
+                grounded=False,
+            )
 
-        if not relevant:
+        retrieval_query = condense_question(question, history or [])
+        results = self.vector_store.search(
+            retrieval_query, top_k=self.top_k, allowed_documents=document_filter
+        )
+
+        gate, support = RELEVANCE_THRESHOLDS.get(
+            self.vector_store.embedding_backend, DEFAULT_RELEVANCE_THRESHOLD
+        )
+        if not results or results[0][1] < gate:
+            # The best match isn't confident enough for the question to be
+            # in-scope at all - refuse without spending an LLM call on it.
             return Answer(
                 text=NOT_FOUND_MESSAGE,
                 sources=[],
                 response_time_seconds=time.perf_counter() - start,
                 grounded=False,
             )
+        relevant: list[tuple[Chunk, float]] = [(c, s) for c, s in results if s >= support]
 
         chunks = [c for c, _ in relevant]
         messages = build_messages(question, chunks, history=history)

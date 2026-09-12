@@ -54,7 +54,12 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         from sentence_transformers import SentenceTransformer
 
         self._model = SentenceTransformer(model_name)
-        self.dimension = self._model.get_sentence_embedding_dimension()
+        # get_embedding_dimension() replaced get_sentence_embedding_dimension()
+        # in newer sentence-transformers releases; support both.
+        get_dim = getattr(self._model, "get_embedding_dimension", None) or getattr(
+            self._model, "get_sentence_embedding_dimension"
+        )
+        self.dimension = get_dim()
 
     def encode(self, texts: list[str]) -> np.ndarray:
         if not texts:

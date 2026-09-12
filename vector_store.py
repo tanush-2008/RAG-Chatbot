@@ -127,18 +127,54 @@ class VectorStore:
         self.index.add(vectors)
         self.chunks.extend(chunks)
 
-    def search(self, query: str, top_k: int = 4) -> list[tuple[Chunk, float]]:
-        """Return the top_k most similar chunks to the query with similarity scores."""
+    @property
+    def document_names(self) -> list[str]:
+        """Distinct source document names currently indexed, in first-seen order."""
+        seen: dict[str, None] = {}
+        for chunk in self.chunks:
+            seen.setdefault(chunk.source, None)
+        return list(seen.keys())
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 4,
+        allowed_documents: set[str] | None = None,
+    ) -> list[tuple[Chunk, float]]:
+        """Return the top_k most similar chunks to the query with similarity scores.
+
+        `allowed_documents`, if given, restricts results to chunks from those
+        source document names only (Module 7's "document filters" feature) -
+        useful when several unrelated PDFs are indexed together and a question
+        should only be answered from a subset of them.
+        """
         if self.is_empty:
             return []
         query_vector = self._embedder.encode([query])
-        scores, indices = self.index.search(query_vector, min(top_k, len(self.chunks)))
-        results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx == -1:
-                continue
-            results.append((self.chunks[idx], float(score)))
-        return results
+
+        if allowed_documents is None:
+            k = min(top_k, len(self.chunks))
+            scores, indices = self.index.search(query_vector, k)
+            return [
+                (self.chunks[idx], float(score))
+                for score, idx in zip(scores[0], indices[0])
+                if idx != -1
+            ]
+
+        # Metadata filtering isn't native to a flat FAISS index, so over-fetch
+        # and filter client-side, widening the search until we have enough
+        # matches (or have covered the whole index).
+        k = min(max(top_k * 4, top_k), len(self.chunks))
+        while True:
+            scores, indices = self.index.search(query_vector, k)
+            results = [
+                (self.chunks[idx], float(score))
+                for score, idx in zip(scores[0], indices[0])
+                if idx != -1 and self.chunks[idx].source in allowed_documents
+            ]
+            if len(results) >= top_k or k >= len(self.chunks):
+                return results[:top_k]
+            k = min(k * 4, len(self.chunks))
 
     def save(self, directory: str | Path) -> None:
         directory = Path(directory)
