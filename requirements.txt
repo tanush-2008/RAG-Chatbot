@@ -1,0 +1,9 @@
+streamlit>=1.38
+pypdf>=4.3
+sentence-transformers>=3.0
+faiss-cpu>=1.8
+numpy>=1.26
+python-dotenv>=1.0
+groq>=0.11
+openai>=1.40
+google-genai>=0.3
