@@ -7,3 +7,5 @@ vector_store/saved_index/*.pkl
 .streamlit/secrets.toml
 *.egg-info/
 .pytest_cache/
+feedback/
+users.json
