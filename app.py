@@ -255,10 +255,26 @@ def sidebar(pipeline: RAGPipeline, username: str) -> None:
         if len(document_names) > 1:
             with st.container(border=True):
                 st.markdown("**🔍 Search scope**")
-                st.session_state.document_filter = st.multiselect(
+                if "document_filter" not in st.session_state:
+                    st.session_state.document_filter = document_names
+                else:
+                    # Drop stale selections (e.g. a document removed by
+                    # Clear all + reprocessing) so the widget never sees a
+                    # value outside its current options.
+                    st.session_state.document_filter = [
+                        d for d in st.session_state.document_filter if d in document_names
+                    ]
+                # key="document_filter" binds this widget directly to
+                # session_state - reading AND writing it manually as well
+                # (the previous code did `st.session_state.document_filter =
+                # st.multiselect(..., default=st.session_state.get(...))`)
+                # creates a feedback loop where a click briefly gets
+                # overwritten by the stale pre-click value, which is what
+                # caused the flicker on removing an item.
+                st.multiselect(
                     "Only answer from:",
                     options=document_names,
-                    default=st.session_state.get("document_filter", document_names),
+                    key="document_filter",
                     help="Restrict retrieval to a subset of the indexed documents.",
                     label_visibility="collapsed",
                 )
