@@ -90,6 +90,15 @@ def extract_pages(
         raw_bytes = bytes(file_obj)
     else:
         raw_bytes = file_obj.read()
+
+    # A cheap, fast rejection of content that isn't actually a PDF (e.g. a
+    # renamed .txt/.exe), before spending time on pypdf's heavier parsing -
+    # and with a clearer message than pypdf's own error would surface.
+    if not raw_bytes.lstrip(b"\x00\xef\xbb\xbf").startswith(b"%PDF-"):
+        raise DocumentValidationError(
+            f"'{source_name}' does not look like a valid PDF file (missing the %PDF header)."
+        )
+
     file_obj = io.BytesIO(raw_bytes)
 
     pages: list[PageDocument] = []

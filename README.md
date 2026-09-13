@@ -88,19 +88,20 @@ MP3/
 |-- api.py                  # Optional: FastAPI backend for other clients
 |-- rag_pipeline.py         # Orchestrates extraction -> chunking -> retrieval -> answer
 |-- document_loader.py      # Module 1 & 2: upload validation + PDF text extraction
-|-- vector_store.py         # Module 3 & 4: chunking + FAISS-backed vector store
+|-- vector_store.py         # Module 3 & 4: chunking + FAISS-backed vector store (atomic, locked)
 |-- text_splitter.py        # Dependency-free recursive character text splitter
 |-- embeddings.py           # Sentence Transformers wrapper + offline fallback
-|-- llm_provider.py         # Groq / OpenAI / Gemini abstraction + follow-up condensing
+|-- llm_provider.py         # Groq / OpenAI / Gemini abstraction + retry/fallback + condensing
 |-- prompt.py               # Module 6: grounded-answer system prompt / guardrail
 |-- logging_config.py       # Shared backend logging setup
 |-- auth.py                 # Optional: login gate + per-user document isolation
-|-- feedback.py             # Optional: 👍/👎 feedback logging
+|-- feedback.py             # Optional: 👍/👎 feedback logging (surfaced in the sidebar)
 |-- ocr.py                  # Optional: OCR fallback for scanned PDF pages
 |-- tools/
 |   `-- manage_users.py     # CLI to add/remove login accounts
-|-- Dockerfile, docker-compose.yml, .dockerignore
-|-- requirements.txt        # Runtime dependencies
+|-- .github/workflows/tests.yml  # CI: runs the test suite on every push/PR
+|-- Dockerfile, docker-compose.yml, .dockerignore  # Non-root container
+|-- requirements.txt        # Runtime dependencies, pinned to exact versions
 |-- requirements-dev.txt    # + test-only dependencies (pytest, reportlab)
 |-- README.md
 |-- PROJECT_REPORT.md
@@ -115,6 +116,7 @@ MP3/
     |-- evaluation_results.csv  # A checked-in real run: 19/19 (100%)
     |-- test_rag_pipeline.py    # Core pipeline tests
     |-- test_auth.py, test_feedback.py, test_api.py, test_ocr.py
+    `-- test_vector_store.py, test_llm_provider.py
 ```
 
 ## Setup
@@ -142,6 +144,11 @@ MP3/
    Set `LLM_PROVIDER` to `groq`, `openai`, or `gemini` to match. If you skip
    this step entirely, the app still runs end-to-end: it will show the most
    relevant retrieved passage instead of an LLM-generated answer.
+
+   Optional: fill in a *second* provider's key too. `llm_provider.py`
+   automatically retries transient failures and, if your primary provider is
+   still down afterward, falls back to any other configured provider before
+   giving up - so one provider's outage doesn't take answering down with it.
 
 3. Run the app:
 
@@ -217,9 +224,12 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
-40 tests cover the core pipeline, question splitting, source deduplication,
-the login gate and password hashing, feedback logging, the FastAPI backend,
-and the OCR fallback's graceful degradation.
+58 tests cover the core pipeline, question splitting, source deduplication,
+text normalization, corrupted/non-PDF upload rejection, atomic/locked vector
+store persistence, LLM retry and provider-fallback behavior, the login gate
+and password hashing, feedback logging, the FastAPI backend, and the OCR
+fallback's graceful degradation. The same suite runs in CI on every push
+(`.github/workflows/tests.yml`).
 
 `tests/test_questions.csv` is a 19-question evaluation sheet covering
 correct, incorrect, and unavailable questions, per the project's testing
@@ -235,6 +245,37 @@ This grades every question against its expected source/refusal, writes
 `tests/evaluation_results.csv`, and prints a summary (retrieval accuracy,
 refusal accuracy, average response time) - a checked-in run currently scores
 19/19 (100%).
+
+## Reliability & Production Readiness
+
+Hardening added on top of the core stack (still Streamlit + FAISS + local
+persistence - no new infrastructure), so the same architecture holds up
+under real daily use rather than just a demo:
+
+- **Crash/concurrency-safe persistence**: `VectorStore.save()` writes to a
+  temp file and atomically renames it into place, guarded by a cross-process
+  file lock (`filelock`) - a crash mid-write or two saves racing (two browser
+  tabs, or the Streamlit app and the API writing at once) can no longer
+  corrupt the index. A busy lock surfaces as a clear "try again" message
+  instead of hanging or failing silently.
+- **LLM call resilience** (`llm_provider.call_llm`): transient failures
+  (rate limits, timeouts) are retried with exponential backoff; if a
+  provider is still down after retries and a second provider's API key is
+  also configured, it automatically falls back to that provider before
+  giving up - one provider's outage doesn't take the whole app down.
+- **Faster, clearer upload rejection**: PDFs are checked by magic bytes
+  (`%PDF-`) before parsing, so a renamed non-PDF file is rejected
+  immediately with a clear message instead of failing deep inside `pypdf`.
+- **CI on every push** (`.github/workflows/tests.yml`): the full test suite
+  runs on GitHub Actions for every push/PR.
+- **Pinned dependencies** (`requirements.txt`): exact versions, not ranges,
+  for reproducible installs across machines.
+- **Non-root Docker container**: the app runs as an unprivileged user inside
+  the container, standard hardening against a compromised process touching
+  more than its own files.
+- **Feedback insights in the UI**: the 👍/👎 data `feedback.py` already
+  collected is now surfaced live in the sidebar (helpful/not-helpful counts,
+  helpful rate) instead of sitting unused in a log file.
 
 ## Responsible AI & Security
 

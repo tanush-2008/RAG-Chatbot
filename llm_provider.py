@@ -9,10 +9,14 @@ without any paid API key (useful for offline grading/demo).
 from __future__ import annotations
 
 import os
+import time
 
 from logging_config import get_logger
 
 log = get_logger(__name__)
+
+MAX_RETRIES = 2
+BASE_BACKOFF_SECONDS = 1.0
 
 
 class LLMError(RuntimeError):
@@ -85,36 +89,66 @@ PROVIDER_CALLERS = {
 }
 
 
+def _call_with_retry(caller, messages: list[dict], model: str, api_key: str, provider_name: str) -> str:
+    """Retry a single provider call with exponential backoff on transient errors
+    (rate limits, timeouts, momentary network issues) before giving up on it."""
+    last_exc: Exception | None = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return caller(messages, model, api_key)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < MAX_RETRIES:
+                delay = BASE_BACKOFF_SECONDS * (2**attempt)
+                log.warning(
+                    "%s call failed (attempt %d/%d): %s - retrying in %.1fs",
+                    provider_name, attempt + 1, MAX_RETRIES + 1, exc, delay,
+                )
+                time.sleep(delay)
+    raise last_exc
+
+
+def _configured_providers(primary: str) -> list[str]:
+    """Primary provider first (if it has a key), then any other configured
+    provider as a fallback chain, so one provider's outage doesn't take the
+    whole app down when a second key happens to be configured."""
+    ordered = [primary] + [p for p in PROVIDER_CALLERS if p != primary]
+    return [p for p in ordered if p in PROVIDER_CALLERS and os.getenv(PROVIDER_CALLERS[p][1])]
+
+
 def call_llm(messages: list[dict], provider: str | None = None, model: str | None = None) -> str:
-    """Route a chat request to the configured provider, with a safe offline fallback."""
-    provider = (provider or os.getenv("LLM_PROVIDER", "groq")).lower()
+    """Route a chat request to the configured provider, retrying transient
+    failures and falling back to any other configured provider before
+    finally dropping to the offline extractive mode."""
+    primary = (provider or os.getenv("LLM_PROVIDER", "groq")).lower()
+    candidates = _configured_providers(primary)
 
-    if provider not in PROVIDER_CALLERS:
-        log.debug("Unknown provider %r configured; using extractive fallback.", provider)
+    if not candidates:
+        log.debug("No LLM provider configured; using extractive fallback.")
         return _extractive_fallback(messages)
 
-    caller, key_env_var, default_model = PROVIDER_CALLERS[provider]
-    api_key = os.getenv(key_env_var)
-    if not api_key:
-        log.debug("No %s configured; using extractive fallback.", key_env_var)
-        return _extractive_fallback(messages)
+    last_error: Exception | None = None
+    for candidate in candidates:
+        caller, key_env_var, default_model = PROVIDER_CALLERS[candidate]
+        api_key = os.getenv(key_env_var)
+        resolved_model = (
+            (model or os.getenv("LLM_MODEL") or default_model) if candidate == primary else default_model
+        )
+        is_fallback = candidate != primary
+        log.debug("Calling %s (%s)%s", candidate, resolved_model, " [fallback]" if is_fallback else "")
+        try:
+            return _call_with_retry(caller, messages, resolved_model, api_key, candidate)
+        except Exception as exc:
+            log.error("%s request failed after retries: %s", candidate, exc)
+            last_error = exc
 
-    resolved_model = model or os.getenv("LLM_MODEL") or default_model
-    log.debug("Calling %s (%s)", provider, resolved_model)
-    try:
-        return caller(messages, resolved_model, api_key)
-    except Exception as exc:
-        log.error("%s request failed: %s", provider, exc)
-        raise LLMError(f"{provider} request failed: {exc}") from exc
+    raise LLMError(f"All configured LLM provider(s) failed; last error: {last_error}")
 
 
 def is_llm_configured(provider: str | None = None) -> bool:
-    """Whether a real LLM (not the extractive fallback) is available to call."""
-    provider = (provider or os.getenv("LLM_PROVIDER", "groq")).lower()
-    if provider not in PROVIDER_CALLERS:
-        return False
-    _, key_env_var, _ = PROVIDER_CALLERS[provider]
-    return bool(os.getenv(key_env_var))
+    """Whether at least one real LLM (not the extractive fallback) is available to call."""
+    primary = (provider or os.getenv("LLM_PROVIDER", "groq")).lower()
+    return bool(_configured_providers(primary))
 
 
 def condense_question(

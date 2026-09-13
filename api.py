@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile
+from filelock import Timeout
 from pydantic import BaseModel
 
 from document_loader import DocumentValidationError
@@ -30,6 +31,16 @@ from logging_config import get_logger
 from rag_pipeline import RAGPipeline
 
 log = get_logger(__name__)
+
+
+def _save_pipeline() -> None:
+    try:
+        pipeline.save(str(VECTOR_STORE_DIR))
+    except Timeout as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The document store is busy (another save is in progress). Please retry shortly.",
+        ) from exc
 
 VECTOR_STORE_DIR = Path("vector_store/saved_index/api")
 
@@ -101,7 +112,7 @@ def list_documents() -> dict:
 @app.delete("/documents", dependencies=[Depends(require_api_key)])
 def clear_documents() -> dict:
     pipeline.clear()
-    pipeline.save(str(VECTOR_STORE_DIR))
+    _save_pipeline()
     return {"status": "cleared"}
 
 
@@ -123,7 +134,7 @@ async def upload_documents(
         log.warning("Upload rejected: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    pipeline.save(str(VECTOR_STORE_DIR))
+    _save_pipeline()
     log.info("Uploaded %d file(s), %d chunk(s) added.", len(files), num_chunks)
     return ProcessResponse(
         files_processed=len(files),

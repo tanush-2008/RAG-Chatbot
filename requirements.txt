@@ -1,20 +1,24 @@
-streamlit>=1.38
-pypdf>=4.3
-sentence-transformers>=3.0
-faiss-cpu>=1.8
-numpy>=1.26
-python-dotenv>=1.0
-groq>=0.11
-openai>=1.40
-google-genai>=0.3
+# Pinned to a known-good set for reproducible installs (verified together,
+# tested end-to-end). Bump deliberately, not via unpinned ranges drifting
+# across environments.
+streamlit==1.63.0
+pypdf==6.18.1
+sentence-transformers==6.0.1
+faiss-cpu==1.15.0
+numpy==2.5.3
+python-dotenv==1.2.3
+groq==1.7.0
+openai==3.13.0
+google-genai==2.23.0
+filelock==3.32.6
 
 # Optional advanced features: FastAPI backend (api.py)
-fastapi>=0.115
-uvicorn[standard]>=0.30
-python-multipart>=0.0.9
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.32
 
 # Optional advanced feature: OCR for scanned PDFs (ocr.py). Also requires the
 # Tesseract OCR engine installed separately on the host - see ocr.py.
-pytesseract>=0.3.10
-pypdfium2>=4.30
-Pillow>=10.0
+pytesseract==0.3.13
+pypdfium2==5.13.0
+Pillow==12.3.0

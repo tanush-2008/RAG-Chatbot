@@ -100,19 +100,42 @@ relevant is found - directly addressing minimum feature #7.
 - **Backend logging** (`logging_config.py`): structured logging added
   across the LLM provider, retrieval, auth, OCR, and API modules (question
   content and passwords are never logged - only lengths/booleans/counts).
+- **Enterprise-readiness hardening pass**: after the user asked how this
+  could support daily real-world use "without deviating from the document
+  requirements," pushed the existing stack (Streamlit + FAISS + local
+  persistence - no new architecture) as far as it reasonably goes:
+  - `VectorStore.save()` now writes atomically (temp file + `os.replace`)
+    under a cross-process file lock (`filelock`), so a crash mid-write or
+    two saves racing (two tabs, or the API and the UI at once) can't
+    corrupt the store; a busy lock surfaces as a clear retry message
+    instead of hanging.
+  - `llm_provider.call_llm()` retries transient failures with exponential
+    backoff and automatically falls back to a second configured provider
+    before giving up, so one provider's outage doesn't stop answering.
+  - PDF uploads are checked by magic bytes before parsing, rejecting a
+    renamed non-PDF file immediately with a clear message.
+  - CI (`.github/workflows/tests.yml`) runs the full suite on every push;
+    `requirements.txt` is pinned to exact versions; the Docker image runs
+    as a non-root user.
+  - The feedback data `feedback.py` already collected (👍/👎 counts, helpful
+    rate) is now surfaced live in the sidebar instead of sitting unused in
+    a log file.
 
 ## 4. Testing
 
-- 44 automated `pytest` tests across `test_rag_pipeline.py`, `test_auth.py`,
-  `test_feedback.py`, `test_api.py`, and `test_ocr.py` - covering file
-  validation, text extraction with metadata, corrupted-PDF handling, text
+- 58 automated `pytest` tests across `test_rag_pipeline.py`, `test_auth.py`,
+  `test_feedback.py`, `test_api.py`, `test_ocr.py`, `test_vector_store.py`,
+  and `test_llm_provider.py` - covering file validation, text extraction
+  with metadata, corrupted/non-PDF-content upload rejection, text
   normalization, indexing, retrieval and sourcing, refusal behavior,
   question-batch splitting, source deduplication, login/password hashing
-  and per-user isolation, feedback
-  logging, the FastAPI endpoints (including its API-key gate), and the OCR
-  fallback's graceful degradation (verified both with Tesseract genuinely
-  absent, and via a simulated-available case that exercises the real
-  plumbing) - all passing, fully offline.
+  and per-user isolation, feedback logging, the FastAPI endpoints
+  (including its API-key gate), the OCR fallback's graceful degradation
+  (verified both with Tesseract genuinely absent, and via a
+  simulated-available case that exercises the real plumbing), atomic/locked
+  vector store persistence (including a genuine cross-process lock timeout),
+  and LLM retry/fallback behavior - all passing, fully offline. The same
+  suite now runs in CI on every push.
 - A 19-question evaluation sheet (`tests/test_questions.csv`) covers
   correct, incorrect, and prompt-injection questions across both sample
   documents. `tests/evaluate.py` runs it automatically against the live

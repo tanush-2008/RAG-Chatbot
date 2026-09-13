@@ -8,6 +8,7 @@ from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
+from filelock import Timeout
 
 # Must run before importing auth: its USERS_FILE is bound from the
 # AUTH_USERS_FILE env var at import time, so .env has to be loaded first.
@@ -16,7 +17,7 @@ load_dotenv()
 import auth
 import ocr
 from document_loader import DocumentValidationError, MAX_FILE_SIZE_MB
-from feedback import log_feedback
+from feedback import feedback_summary, log_feedback
 from rag_pipeline import RAGPipeline
 
 BASE_VECTOR_STORE_DIR = Path("vector_store/saved_index")
@@ -237,6 +238,12 @@ def sidebar(pipeline: RAGPipeline, username: str) -> None:
                         except DocumentValidationError as exc:
                             status.update(label="Processing failed.", state="error")
                             st.error(str(exc))
+                        except Timeout:
+                            status.update(label="Processing failed.", state="error")
+                            st.error(
+                                "The document store is busy (another save is in progress). "
+                                "Please try again in a moment."
+                            )
 
             if clear_docs_clicked:
                 pipeline.clear()
@@ -284,6 +291,16 @@ def sidebar(pipeline: RAGPipeline, username: str) -> None:
             if st.button("Clear Chat", use_container_width=True):
                 st.session_state.messages = []
                 st.rerun()
+
+        with st.expander("📊 Feedback insights"):
+            summary = feedback_summary()
+            if summary["total"] == 0:
+                st.caption("No feedback logged yet - 👍/👎 an answer to start building this up.")
+            else:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("👍 Helpful", summary["up"])
+                col2.metric("👎 Not helpful", summary["down"])
+                col3.metric("Helpful rate", f"{summary['helpful_rate']:.0%}")
 
         provider = os.getenv("LLM_PROVIDER", "groq")
         backend = pipeline.vector_store.embedding_backend if not pipeline.vector_store.is_empty else "—"

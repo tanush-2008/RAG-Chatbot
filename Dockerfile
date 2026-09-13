@@ -8,6 +8,9 @@
 # (WDAC) policy there blocked torch's native DLLs, forcing a lower-accuracy
 # offline embedding fallback (see embeddings.py). Torch has no such
 # restriction here, so the real all-MiniLM-L6-v2 model loads normally.
+#
+# Runs as a non-root user (standard container hardening - a compromised
+# process can't write outside its own files or touch the host as root).
 
 FROM python:3.12-slim
 
@@ -19,7 +22,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p vector_store/saved_index feedback
+RUN mkdir -p vector_store/saved_index feedback && \
+    useradd --create-home --shell /bin/bash appuser && \
+    chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8501
 

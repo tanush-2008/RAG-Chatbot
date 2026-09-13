@@ -84,6 +84,15 @@ def test_upload_rejects_non_pdf(client):
     assert response.status_code == 400
 
 
+def test_upload_rejects_fake_pdf_content(client):
+    # .pdf extension but not actually PDF content (magic-byte check).
+    response = client.post(
+        "/documents/upload",
+        files=[("files", ("fake.pdf", b"not really a pdf", "application/pdf"))],
+    )
+    assert response.status_code == 400
+
+
 def test_api_key_gate(client, monkeypatch):
     monkeypatch.setenv("API_KEY", "secret123")
     response = client.get("/documents")

@@ -2,20 +2,32 @@
 
 from __future__ import annotations
 
+import os
 import pickle
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import faiss
 import numpy as np
+from filelock import FileLock
 
 from document_loader import PageDocument
 from embeddings import BaseEmbedder, load_embedder
+from logging_config import get_logger
 from text_splitter import RecursiveCharacterTextSplitter
+
+log = get_logger(__name__)
 
 DEFAULT_CHUNK_SIZE = 900
 DEFAULT_CHUNK_OVERLAP = 150
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+LOCK_TIMEOUT_SECONDS = 30
+
+
+def _pickle_dump(obj, path: str) -> None:
+    with open(path, "wb") as f:
+        pickle.dump(obj, f)
 
 
 @dataclass
@@ -180,23 +192,56 @@ class VectorStore:
             k = min(k * 4, len(self.chunks))
 
     def save(self, directory: str | Path) -> None:
+        """Persist the index and chunk metadata, safely under concurrent access.
+
+        Two failure modes matter for a store that real people hit daily:
+        a crash or power-loss mid-write leaving a half-written file, and two
+        processes (or two browser tabs for the same user) saving at the same
+        time. Both are handled by writing to a temp file in the same
+        directory and atomically renaming it into place (`os.replace` is
+        atomic on both POSIX and Windows for same-volume renames), guarded by
+        a cross-process file lock so the write and rename happen as one step.
+        """
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        if self.index is not None:
-            faiss.write_index(self.index, str(directory / "index.faiss"))
-        with open(directory / "chunks.pkl", "wb") as f:
-            pickle.dump({"chunks": self.chunks, "embedding_model_name": self.embedding_model_name}, f)
+        lock = FileLock(str(directory / ".lock"), timeout=LOCK_TIMEOUT_SECONDS)
+        with lock:
+            if self.index is not None:
+                self._atomic_write(directory / "index.faiss", faiss.write_index, self.index)
+            self._atomic_write(directory / "chunks.pkl", _pickle_dump, {
+                "chunks": self.chunks,
+                "embedding_model_name": self.embedding_model_name,
+            })
+        log.info("Saved vector store to %s (%d chunks).", directory, len(self.chunks))
+
+    @staticmethod
+    def _atomic_write(path: Path, writer, obj) -> None:
+        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+        os.close(fd)
+        try:
+            writer(obj, tmp_path)
+            # os.replace is atomic on POSIX and Windows for same-volume
+            # renames - but on Windows it also requires the destination
+            # (and the source) not be open elsewhere, which is why every
+            # writer below closes its file handle before returning.
+            os.replace(tmp_path, path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
     @classmethod
     def load(cls, directory: str | Path) -> "VectorStore":
         directory = Path(directory)
-        with open(directory / "chunks.pkl", "rb") as f:
-            data = pickle.load(f)
-        store = cls(embedding_model_name=data["embedding_model_name"])
-        store.chunks = data["chunks"]
-        index_path = directory / "index.faiss"
-        if index_path.exists():
-            store.index = faiss.read_index(str(index_path))
+        lock = FileLock(str(directory / ".lock"), timeout=LOCK_TIMEOUT_SECONDS)
+        with lock:
+            with open(directory / "chunks.pkl", "rb") as f:
+                data = pickle.load(f)
+            store = cls(embedding_model_name=data["embedding_model_name"])
+            store.chunks = data["chunks"]
+            index_path = directory / "index.faiss"
+            if index_path.exists():
+                store.index = faiss.read_index(str(index_path))
         return store
 
     @staticmethod

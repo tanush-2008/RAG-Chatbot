@@ -63,6 +63,16 @@ def test_extract_pages_rejects_corrupted_pdf_cleanly():
         extract_pages(truncated, "corrupted.pdf")
 
 
+def test_extract_pages_rejects_non_pdf_content_by_magic_bytes():
+    # A file renamed to .pdf but not actually PDF content (e.g. a text file
+    # or executable) should be rejected fast and clearly, before pypdf ever
+    # gets a chance to parse it.
+    from document_loader import extract_pages
+
+    with pytest.raises(DocumentValidationError, match="does not look like a valid PDF"):
+        extract_pages(b"This is just plain text, not a PDF.", "fake.pdf")
+
+
 def test_extraction_preserves_metadata():
     files = _sample_files()
     pages = load_documents(files)
