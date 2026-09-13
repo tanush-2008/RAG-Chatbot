@@ -29,6 +29,20 @@ deployment, and an automated evaluation harness.
 - Works fully offline (no API key) via a built-in extractive fallback mode,
   and even without `torch`/`sentence-transformers` available, via a
   dependency-free hashing embedder fallback - see [Notes on portability](#notes-on-portability).
+- Normalizes text extracted from tables/diagrams that pypdf renders one word
+  per line (a real PDF-layout artifact) back into natural phrases before
+  chunking, since that noise otherwise degrades embedding quality - see
+  `document_loader._normalize_extracted_text()`.
+
+## Interface
+
+A custom-themed Streamlit UI (see `.streamlit/config.toml` and the CSS in
+`app.py`): a status badge row (LLM provider, indexed documents/chunks, OCR
+readiness), card-based sidebar sections, live multi-step progress while
+documents are processed (`st.status`, driven by `RAGPipeline`'s
+`on_progress` callback - a visible illustration of the RAG pipeline's
+stages), a friendly empty state with example-question chips, and
+grid-style source citation cards.
 
 ## Optional Advanced Features
 
@@ -79,6 +93,7 @@ MP3/
 |-- embeddings.py           # Sentence Transformers wrapper + offline fallback
 |-- llm_provider.py         # Groq / OpenAI / Gemini abstraction + follow-up condensing
 |-- prompt.py               # Module 6: grounded-answer system prompt / guardrail
+|-- logging_config.py       # Shared backend logging setup
 |-- auth.py                 # Optional: login gate + per-user document isolation
 |-- feedback.py             # Optional: 👍/👎 feedback logging
 |-- ocr.py                  # Optional: OCR fallback for scanned PDF pages

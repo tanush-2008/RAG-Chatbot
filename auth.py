@@ -25,6 +25,10 @@ import re
 import secrets
 from pathlib import Path
 
+from logging_config import get_logger
+
+log = get_logger(__name__)
+
 USERS_FILE = Path(os.getenv("AUTH_USERS_FILE") or "users.json")
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
 PBKDF2_ITERATIONS = 260_000
@@ -81,7 +85,10 @@ def authenticate(username: str, password: str) -> bool:
     users = load_users()
     record = users.get(username)
     if not record:
+        log.warning("Login attempt for unknown user %r.", username)
         return False
     expected_hash, salt = record["password_hash"], record["salt"]
     computed_hash, _ = hash_password(password, salt)
-    return secrets.compare_digest(computed_hash, expected_hash)
+    ok = secrets.compare_digest(computed_hash, expected_hash)
+    log.info("Login %s for user %r.", "succeeded" if ok else "failed", username)
+    return ok

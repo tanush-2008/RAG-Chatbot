@@ -14,7 +14,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from document_loader import DocumentValidationError, load_documents, validate_file
+from document_loader import (
+    DocumentValidationError,
+    _normalize_extracted_text,
+    load_documents,
+    validate_file,
+)
 from rag_pipeline import RAGPipeline, split_into_questions
 
 DOCS_DIR = Path(__file__).resolve().parent.parent / "documents"
@@ -43,6 +48,19 @@ def test_validate_file_rejects_non_pdf():
 def test_validate_file_rejects_oversized():
     with pytest.raises(DocumentValidationError):
         validate_file("big.pdf", 100 * 1024 * 1024)
+
+
+def test_extract_pages_rejects_corrupted_pdf_cleanly():
+    # pypdf parses the xref/page tree lazily, so a truncated/malformed file
+    # can raise only once .pages is accessed - this must surface as a clean
+    # DocumentValidationError, not an unhandled exception that crashes the
+    # whole upload (previously reproduced live with a corrupted trailer).
+    from document_loader import extract_pages
+
+    data = (DOCS_DIR / "Policy.pdf").read_bytes()
+    truncated = data[: len(data) // 3]
+    with pytest.raises(DocumentValidationError):
+        extract_pages(truncated, "corrupted.pdf")
 
 
 def test_extraction_preserves_metadata():
@@ -124,3 +142,24 @@ def test_history_param_accepted_offline(pipeline: RAGPipeline):
     history = [("How is attendance calculated?", "Based on biometric check-in/out.")]
     answer = pipeline.ask("What about remote days?", history=history)
     assert answer.response_time_seconds >= 0
+
+
+def test_normalize_extracted_text_flattens_word_per_line_layout():
+    # A real artifact from pypdf on table/diagram-heavy PDF layouts: content
+    # is present but each word lands on its own line, which reads as noise
+    # to a sentence embedding model instead of the phrase it actually is.
+    pathological = "Beginner\n \nembedding\n \nmodel\n \nall-MiniLM-L6-v2\n \nVector\n \ndatabase\n \nFAISS"
+    normalized = _normalize_extracted_text(pathological)
+    assert normalized == "Beginner embedding model all-MiniLM-L6-v2 Vector database FAISS"
+
+
+def test_normalize_extracted_text_preserves_normal_prose():
+    prose = "2. Types of Leave\nEmployees are entitled to the following categories of leave."
+    normalized = _normalize_extracted_text(prose)
+    assert "Types of Leave\n" in normalized
+    assert "Employees are entitled" in normalized
+
+
+def test_normalize_extracted_text_empty_input():
+    assert _normalize_extracted_text("") == ""
+    assert _normalize_extracted_text("   \n\n  ") == ""

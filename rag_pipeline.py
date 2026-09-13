@@ -5,11 +5,15 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 from document_loader import load_documents
 from llm_provider import LLMError, call_llm, condense_question
+from logging_config import get_logger
 from prompt import NOT_FOUND_MESSAGE, build_messages
 from vector_store import Chunk, VectorStore, chunk_documents
+
+log = get_logger(__name__)
 
 DEFAULT_TOP_K = 4
 MAX_QUESTIONS_PER_MESSAGE = 10
@@ -86,19 +90,41 @@ class RAGPipeline:
         self.vector_store = VectorStore()
         self.processed_files: list[str] = []
 
-    def process_documents(self, files: list[tuple[str, bytes, int]], enable_ocr: bool = False) -> int:
+    def process_documents(
+        self,
+        files: list[tuple[str, bytes, int]],
+        enable_ocr: bool = False,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> int:
         """Validate, extract, chunk, embed, and index a batch of uploaded PDFs.
 
         `enable_ocr` turns on the OCR fallback (ocr.py) for scanned/image-only
         pages that have no extractable text; it's a no-op if the Tesseract
         binary isn't installed on the host.
 
+        `on_progress`, if given, is called with a short human-readable label
+        after each pipeline stage (extraction, chunking, embedding/indexing) -
+        lets a UI show the RAG workflow's stages live instead of one opaque
+        spinner, which doubles as a plain illustration of the pipeline itself.
+
         Returns the number of chunks added. Raises DocumentValidationError on bad input.
         """
+        report = on_progress or (lambda _: None)
+
+        report(f"Extracting text from {len(files)} file(s)...")
         pages = load_documents(files, enable_ocr=enable_ocr)
+
+        report(f"Splitting {len(pages)} page(s) into overlapping chunks...")
         chunks = chunk_documents(pages, self.chunk_size, self.chunk_overlap)
+
+        backend = self.vector_store.embedding_backend if not self.vector_store.is_empty else None
+        backend_label = f" ({backend})" if backend else ""
+        report(f"Embedding and indexing {len(chunks)} chunk(s){backend_label}...")
         self.vector_store.add(chunks)
+
         self.processed_files.extend(name for name, _, _ in files)
+        report(f"Done - indexed {len(chunks)} chunk(s) from {len(files)} file(s).")
+        log.info("Indexed %d file(s) into %d chunk(s) (ocr=%s)", len(files), len(chunks), enable_ocr)
         return len(chunks)
 
     def clear(self) -> None:
@@ -215,6 +241,10 @@ class RAGPipeline:
 
         grounded = NOT_FOUND_MESSAGE not in answer_text
         sources = self._dedupe_sources(relevant) if grounded else []
+        log.info(
+            "Answered question (%d chars) - grounded=%s, %d source(s), %.2fs",
+            len(question), grounded, len(sources), time.perf_counter() - start,
+        )
 
         return Answer(
             text=answer_text,

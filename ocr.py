@@ -16,6 +16,10 @@ Setup (only needed to actually use OCR):
 
 from __future__ import annotations
 
+from logging_config import get_logger
+
+log = get_logger(__name__)
+
 _tesseract_checked = False
 _tesseract_available = False
 
@@ -27,10 +31,12 @@ def is_available() -> bool:
         try:
             import pytesseract
 
-            pytesseract.get_tesseract_version()
+            version = pytesseract.get_tesseract_version()
             _tesseract_available = True
-        except Exception:
+            log.info("Tesseract OCR engine available (version %s).", version)
+        except Exception as exc:
             _tesseract_available = False
+            log.info("Tesseract OCR engine not available (%s); OCR will be skipped.", exc)
         _tesseract_checked = True
     return _tesseract_available
 

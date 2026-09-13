@@ -16,6 +16,10 @@ import warnings
 
 import numpy as np
 
+from logging_config import get_logger
+
+log = get_logger(__name__)
+
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 FALLBACK_DIMENSION = 384  # matches all-MiniLM-L6-v2's output dimension
 
@@ -108,13 +112,15 @@ class HashingFallbackEmbedder(BaseEmbedder):
 def load_embedder(model_name: str = DEFAULT_EMBEDDING_MODEL) -> BaseEmbedder:
     """Try to load the real Sentence Transformers model; fall back if unavailable."""
     try:
-        return SentenceTransformerEmbedder(model_name)
+        embedder = SentenceTransformerEmbedder(model_name)
+        log.info("Loaded Sentence Transformers embedding model '%s'.", model_name)
+        return embedder
     except Exception as exc:  # ImportError, OSError (blocked DLL), etc.
-        warnings.warn(
+        message = (
             f"Could not load Sentence Transformers model '{model_name}' ({exc}). "
             "Falling back to a lightweight offline hashing embedder with reduced "
-            "semantic accuracy. Install/enable torch to use the real model.",
-            RuntimeWarning,
-            stacklevel=2,
+            "semantic accuracy. Install/enable torch to use the real model."
         )
+        log.warning(message)
+        warnings.warn(message, RuntimeWarning, stacklevel=2)
         return HashingFallbackEmbedder()

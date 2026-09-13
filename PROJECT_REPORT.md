@@ -73,14 +73,42 @@ relevant is found - directly addressing minimum feature #7.
   test sheet) previously only retrieved context for the combined text,
   starving most of the individual questions. Now detected and answered
   independently, with sources deduplicated and merged across the batch.
+- **Extracted-text normalization** (`document_loader._normalize_extracted_text`):
+  found while testing against a real table/diagram-heavy PDF that `pypdf`
+  can extract certain layouts as one word per line ("Beginner\nembedding\n
+  model\nall-MiniLM-L6-v2"), which is technically correct text but reads as
+  noise to a sentence embedding model - the corresponding retrieval score
+  for a directly-relevant question was 0.121, below the refusal gate.
+  Detecting this pattern (via average words-per-line) and flattening it to
+  natural phrasing raised the same query's score to 0.402, comfortably
+  above threshold, while leaving normally-formatted prose untouched.
+- **Corrupted-PDF handling** (`document_loader.extract_pages`): `pypdf`
+  parses a PDF's cross-reference/page tree lazily, so a malformed file
+  (reproduced live with a truncated/corrupted trailer) could pass the
+  initial `PdfReader()` call and then crash with an unhandled traceback
+  only once `.pages` was actually iterated - bypassing the existing
+  `DocumentValidationError` handling entirely. Fixed by forcing that
+  resolution inside the try/except, and by isolating each individual page
+  access so one corrupt page can't abort the whole file.
+- **UI redesign**: a custom Streamlit theme (`.streamlit/config.toml`) plus
+  CSS for status badges, card-based sidebar sections, a friendly empty
+  state with clickable example questions, and grid-style source citation
+  chips. Document processing now shows live multi-step progress
+  (`st.status`, driven by a new `on_progress` callback on
+  `RAGPipeline.process_documents`) instead of one opaque spinner - both a
+  UX improvement and a visible illustration of the RAG pipeline's stages.
+- **Backend logging** (`logging_config.py`): structured logging added
+  across the LLM provider, retrieval, auth, OCR, and API modules (question
+  content and passwords are never logged - only lengths/booleans/counts).
 
 ## 4. Testing
 
-- 40 automated `pytest` tests across `test_rag_pipeline.py`, `test_auth.py`,
+- 44 automated `pytest` tests across `test_rag_pipeline.py`, `test_auth.py`,
   `test_feedback.py`, `test_api.py`, and `test_ocr.py` - covering file
-  validation, text extraction with metadata, indexing, retrieval and
-  sourcing, refusal behavior, question-batch splitting, source
-  deduplication, login/password hashing and per-user isolation, feedback
+  validation, text extraction with metadata, corrupted-PDF handling, text
+  normalization, indexing, retrieval and sourcing, refusal behavior,
+  question-batch splitting, source deduplication, login/password hashing
+  and per-user isolation, feedback
   logging, the FastAPI endpoints (including its API-key gate), and the OCR
   fallback's graceful degradation (verified both with Tesseract genuinely
   absent, and via a simulated-available case that exercises the real

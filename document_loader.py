@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass, field
 from typing import BinaryIO, Iterable, Union
 
@@ -12,6 +13,32 @@ import ocr
 
 MAX_FILE_SIZE_MB = 25
 ALLOWED_EXTENSIONS = (".pdf",)
+
+_WORD_PER_LINE_THRESHOLD = 3.0  # avg words/line below this looks like a layout artifact
+
+
+def _normalize_extracted_text(text: str) -> str:
+    """Clean up whitespace artifacts from pypdf's text extraction.
+
+    Some PDF layouts (tables, diagrams, text boxes with absolute positioning)
+    make pypdf emit one word per line instead of natural sentences - the
+    content is all there, but "Beginner\\nembedding\\nmodel\\nall-MiniLM-L6-v2"
+    reads as noise to a sentence embedding model instead of the phrase it is.
+    Detected via a simple heuristic (average words per non-blank line) so
+    normally-formatted prose (which already reads fine) is left with its
+    paragraph structure intact.
+    """
+    lines = [line for line in text.split("\n") if line.strip()]
+    if not lines:
+        return text.strip()
+
+    avg_words_per_line = sum(len(line.split()) for line in lines) / len(lines)
+    if avg_words_per_line < _WORD_PER_LINE_THRESHOLD:
+        return re.sub(r"\s+", " ", text).strip()
+
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 class DocumentValidationError(ValueError):
@@ -68,15 +95,24 @@ def extract_pages(
     pages: list[PageDocument] = []
     try:
         reader = PdfReader(file_obj)
-    except Exception as exc:  # pragma: no cover - defensive, surfaced to UI
+        # pypdf parses the cross-reference/page tree lazily, so a malformed
+        # PDF (e.g. a corrupted trailer) can raise only once .pages is
+        # actually accessed, not at construction - force that resolution
+        # here so the failure is caught as a friendly validation error
+        # instead of an unhandled exception later in the loop below.
+        num_pages = len(reader.pages)
+    except Exception as exc:
         raise DocumentValidationError(f"Could not read '{source_name}': {exc}") from exc
 
-    for page_number, page in enumerate(reader.pages, start=1):
+    for page_number in range(1, num_pages + 1):
         try:
+            page = reader.pages[page_number - 1]
             text = page.extract_text() or ""
         except Exception:
+            # A single corrupt page shouldn't abort the whole file - skip it
+            # safely, same as an empty page (falls through to OCR below).
             text = ""
-        text = text.strip()
+        text = _normalize_extracted_text(text)
 
         via_ocr = False
         if not text and enable_ocr:

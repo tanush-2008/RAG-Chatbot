@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import os
 
+from logging_config import get_logger
+
+log = get_logger(__name__)
+
 
 class LLMError(RuntimeError):
     pass
@@ -86,17 +90,21 @@ def call_llm(messages: list[dict], provider: str | None = None, model: str | Non
     provider = (provider or os.getenv("LLM_PROVIDER", "groq")).lower()
 
     if provider not in PROVIDER_CALLERS:
+        log.debug("Unknown provider %r configured; using extractive fallback.", provider)
         return _extractive_fallback(messages)
 
     caller, key_env_var, default_model = PROVIDER_CALLERS[provider]
     api_key = os.getenv(key_env_var)
     if not api_key:
+        log.debug("No %s configured; using extractive fallback.", key_env_var)
         return _extractive_fallback(messages)
 
     resolved_model = model or os.getenv("LLM_MODEL") or default_model
+    log.debug("Calling %s (%s)", provider, resolved_model)
     try:
         return caller(messages, resolved_model, api_key)
     except Exception as exc:
+        log.error("%s request failed: %s", provider, exc)
         raise LLMError(f"{provider} request failed: {exc}") from exc
 
 

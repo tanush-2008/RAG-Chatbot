@@ -26,22 +26,26 @@ from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from document_loader import DocumentValidationError
+from logging_config import get_logger
 from rag_pipeline import RAGPipeline
+
+log = get_logger(__name__)
 
 VECTOR_STORE_DIR = Path("vector_store/saved_index/api")
 
 app = FastAPI(
     title="Domain-Specific RAG Chatbot API",
     description="REST API for uploading PDFs and asking grounded questions about them.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 pipeline = RAGPipeline()
 if (VECTOR_STORE_DIR / "index.faiss").exists():
     try:
         pipeline.load(str(VECTOR_STORE_DIR))
-    except Exception:
-        pass
+        log.info("Loaded persisted index: %d document(s).", len(pipeline.vector_store.document_names))
+    except Exception as exc:
+        log.warning("Could not load persisted index at %s: %s", VECTOR_STORE_DIR, exc)
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -59,6 +63,7 @@ class SourceOut(BaseModel):
     document: str
     page: int
     score: float
+    via_ocr: bool = False
 
 
 class AskResponse(BaseModel):
@@ -77,6 +82,15 @@ class ProcessResponse(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/")
+def root() -> dict:
+    return {
+        "name": "Domain-Specific RAG Chatbot API",
+        "docs": "/docs",
+        "endpoints": ["/health", "/documents", "/documents/upload", "/ask"],
+    }
 
 
 @app.get("/documents", dependencies=[Depends(require_api_key)])
@@ -106,9 +120,11 @@ async def upload_documents(
     try:
         num_chunks = pipeline.process_documents(payload, enable_ocr=enable_ocr)
     except DocumentValidationError as exc:
+        log.warning("Upload rejected: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     pipeline.save(str(VECTOR_STORE_DIR))
+    log.info("Uploaded %d file(s), %d chunk(s) added.", len(files), num_chunks)
     return ProcessResponse(
         files_processed=len(files),
         chunks_added=num_chunks,
@@ -128,7 +144,10 @@ def ask(request: AskRequest) -> AskResponse:
 
     return AskResponse(
         answer=answer.text,
-        sources=[SourceOut(document=s.document, page=s.page, score=s.score) for s in answer.sources],
+        sources=[
+            SourceOut(document=s.document, page=s.page, score=s.score, via_ocr=s.via_ocr)
+            for s in answer.sources
+        ],
         grounded=answer.grounded,
         response_time_seconds=answer.response_time_seconds,
     )
