@@ -15,7 +15,7 @@ from filelock import FileLock
 from document_loader import PageDocument
 from embeddings import BaseEmbedder, load_embedder
 from logging_config import get_logger
-from text_splitter import RecursiveCharacterTextSplitter
+from text_splitter import RecursiveCharacterTextSplitter as _FallbackTextSplitter
 
 log = get_logger(__name__)
 
@@ -41,17 +41,39 @@ class Chunk:
     via_ocr: bool = field(default=False)
 
 
+def _build_text_splitter(chunk_size: int, chunk_overlap: int):
+    """The project brief's suggested tool for chunking. Falls back to a
+    dependency-free reimplementation (text_splitter.py) if the real package
+    can't be imported - it previously pulled in a native extension
+    (uuid_utils, via langchain-core) blocked by this machine's Windows
+    Application Control policy; kept as a safety net in case that or a
+    similar restriction ever recurs, here or on another machine."""
+    try:
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+        return RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+    except Exception as exc:
+        log.warning(
+            "langchain-text-splitters unavailable (%s); using the built-in fallback splitter.", exc
+        )
+        return _FallbackTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+
+
 def chunk_documents(
     pages: list[PageDocument],
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
 ) -> list[Chunk]:
     """Split page text into overlapping chunks while preserving source/page metadata."""
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", " ", ""],
-    )
+    splitter = _build_text_splitter(chunk_size, chunk_overlap)
 
     chunks: list[Chunk] = []
     for page in pages:

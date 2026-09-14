@@ -12,6 +12,7 @@ from filelock import FileLock, Timeout
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import vector_store
 from vector_store import VectorStore, chunk_documents
 from document_loader import PageDocument
 
@@ -86,3 +87,23 @@ def test_exists_reflects_saved_state(tmp_path):
     assert VectorStore.exists(tmp_path) is False
     _sample_store().save(tmp_path)
     assert VectorStore.exists(tmp_path) is True
+
+
+def test_build_text_splitter_uses_real_langchain_by_default():
+    splitter = vector_store._build_text_splitter(900, 150)
+    # The real langchain-text-splitters class, not our fallback reimplementation.
+    assert type(splitter).__module__.startswith("langchain_text_splitters")
+
+
+def test_build_text_splitter_falls_back_when_langchain_unavailable(monkeypatch):
+    monkeypatch.setitem(sys.modules, "langchain_text_splitters", None)
+    splitter = vector_store._build_text_splitter(900, 150)
+    assert isinstance(splitter, vector_store._FallbackTextSplitter)
+
+
+def test_chunk_documents_works_via_fallback_splitter(monkeypatch):
+    monkeypatch.setitem(sys.modules, "langchain_text_splitters", None)
+    pages = [PageDocument(text="Casual Leave is 12 days per year.", source="Policy.pdf", page=2)]
+    chunks = chunk_documents(pages)
+    assert len(chunks) == 1
+    assert chunks[0].text == "Casual Leave is 12 days per year."

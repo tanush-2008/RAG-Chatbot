@@ -1,12 +1,14 @@
-"""Module 3: Recursive character text splitter.
+"""Module 3: Recursive character text splitter (fallback implementation).
 
-A minimal, dependency-free reimplementation of LangChain's
-RecursiveCharacterTextSplitter (same splitting strategy: try each separator in
-order, falling back to the next, and merge pieces back up to chunk_size with
-overlap). Implemented directly instead of depending on the `langchain-text-
-splitters` package, which transitively pulls in `langchain-core` and a native
+vector_store.py uses the real `langchain-text-splitters` package by default
+(the brief's suggested tool). This is a minimal, dependency-free
+reimplementation of the same class (same strategy: try each separator in
+order, falling back to the next, merging pieces back up to chunk_size with
+overlap), kept as a safety net for environments where that package can't be
+imported - it transitively pulls in `langchain-core` and a native
 `uuid_utils` extension that some locked-down environments (e.g. under an
-Application Control / DLL allowlist policy) refuse to load.
+Application Control / DLL allowlist policy) refuse to load, as happened
+during this project's own development.
 """
 
 from __future__ import annotations

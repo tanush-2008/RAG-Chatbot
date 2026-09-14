@@ -23,45 +23,74 @@ class LLMError(RuntimeError):
     pass
 
 
-def _call_groq(messages: list[dict], model: str, api_key: str) -> str:
-    from groq import Groq
+def _to_langchain_messages(messages: list[dict]):
+    """Convert our internal {role, content} dicts to LangChain's message
+    objects, used by the LCEL-style `.invoke()` calls below."""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-    client = Groq(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=800,
-    )
-    return response.choices[0].message.content.strip()
+    role_to_message = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
+    return [role_to_message[m["role"]](content=m["content"]) for m in messages]
+
+
+def _call_groq(messages: list[dict], model: str, api_key: str) -> str:
+    """Module 6's "RAG framework" tool: answer generation via LangChain's
+    unified chat model interface (`.invoke()`), the same pattern used for
+    every provider below. Falls back to the raw Groq SDK if `langchain-groq`
+    isn't installed - only ImportError triggers the fallback; any other
+    exception (auth, rate limit, network) propagates so call_llm()'s
+    retry/fallback-provider logic still handles it correctly."""
+    try:
+        from langchain_groq import ChatGroq
+
+        llm = ChatGroq(model=model, api_key=api_key, temperature=0.1, max_tokens=800)
+        return llm.invoke(_to_langchain_messages(messages)).content.strip()
+    except ImportError:
+        from groq import Groq
+
+        client = Groq(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model, messages=messages, temperature=0.1, max_tokens=800
+        )
+        return response.choices[0].message.content.strip()
 
 
 def _call_openai(messages: list[dict], model: str, api_key: str) -> str:
-    from openai import OpenAI
+    try:
+        from langchain_openai import ChatOpenAI
 
-    client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=800,
-    )
-    return response.choices[0].message.content.strip()
+        llm = ChatOpenAI(model=model, api_key=api_key, temperature=0.1, max_tokens=800)
+        return llm.invoke(_to_langchain_messages(messages)).content.strip()
+    except ImportError:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model, messages=messages, temperature=0.1, max_tokens=800
+        )
+        return response.choices[0].message.content.strip()
 
 
 def _call_gemini(messages: list[dict], model: str, api_key: str) -> str:
-    from google import genai
-    from google.genai import types
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
 
-    client = genai.Client(api_key=api_key)
-    system_prompt = next((m["content"] for m in messages if m["role"] == "system"), "")
-    user_prompt = "\n\n".join(m["content"] for m in messages if m["role"] == "user")
-    response = client.models.generate_content(
-        model=model,
-        contents=user_prompt,
-        config=types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.1),
-    )
-    return response.text.strip()
+        llm = ChatGoogleGenerativeAI(
+            model=model, google_api_key=api_key, temperature=0.1, max_output_tokens=800
+        )
+        return llm.invoke(_to_langchain_messages(messages)).content.strip()
+    except ImportError:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        system_prompt = next((m["content"] for m in messages if m["role"] == "system"), "")
+        user_prompt = "\n\n".join(m["content"] for m in messages if m["role"] == "user")
+        response = client.models.generate_content(
+            model=model,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.1),
+        )
+        return response.text.strip()
 
 
 def _extractive_fallback(messages: list[dict]) -> str:

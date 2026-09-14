@@ -12,6 +12,17 @@ openai==3.13.0
 google-genai==2.23.0
 filelock==3.32.6
 
+# The brief's suggested "RAG framework" and "text splitting" tools: chunking
+# (vector_store.py) and answer generation (llm_provider.py) both go through
+# LangChain's current APIs (LCEL-style .invoke(), not the removed
+# langchain.chains.RetrievalQA pattern from older LangChain versions). Each
+# has a documented, tested fallback if unavailable - see the comments at
+# their respective call sites.
+langchain-text-splitters==1.1.2
+langchain-groq==1.1.3
+langchain-openai==1.6.2
+langchain-google-genai==4.4.0
+
 # Optional advanced features: FastAPI backend (api.py)
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
