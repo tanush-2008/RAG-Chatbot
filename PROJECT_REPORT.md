@@ -32,11 +32,26 @@ relevant is found - directly addressing minimum feature #7.
   the grader/user isn't locked into one paid API. If no key is configured,
   an "extractive" fallback shows the raw retrieved passage instead of an
   LLM-generated answer, so the app is fully runnable with zero setup cost.
-- **Custom text splitter** (`text_splitter.py`): reimplements LangChain's
-  `RecursiveCharacterTextSplitter` behavior directly, avoiding a dependency
-  chain (`langchain-text-splitters` -> `langchain-core` -> `uuid_utils`)
-  that pulls in a native extension blocked outright by this machine's
-  Windows Application Control policy.
+- **LangChain for chunking and LLM calls** (`vector_store.py`,
+  `llm_provider.py`): the brief's suggested tools - LangChain text
+  splitters for chunking, LangChain as the RAG/LLM framework - are used
+  directly: `chunk_documents()` goes through
+  `langchain-text-splitters`' `RecursiveCharacterTextSplitter`, and each
+  LLM provider call (`_call_groq`/`_call_openai`/`_call_gemini`) goes
+  through LangChain's unified chat-model interface (`ChatGroq`/
+  `ChatOpenAI`/`ChatGoogleGenerativeAI`, `.invoke()`). Current LangChain
+  (1.x) has removed the older `langchain.chains.RetrievalQA` chain the
+  brief's authors likely had in mind - `chains` doesn't exist in this
+  version - so the equivalent modern pattern (LCEL-style `.invoke()`
+  against a provider-specific chat model) is used instead; retrieval,
+  prompting, and citation remain this project's own `rag_pipeline.py`.
+  Both integration points fall back to a dependency-free reimplementation
+  (`text_splitter.py`) or the raw provider SDK, respectively, only on
+  `ImportError` - real errors (auth, rate limits) still propagate to the
+  existing retry logic - as a safety net for environments where
+  `langchain-core`'s native `uuid_utils` extension can't load (this
+  project hit exactly that under this machine's Windows Application
+  Control policy during development).
 - **Embedding fallback** (`embeddings.py`): the same class of environment
   restriction blocks `torch`'s native DLLs, which `sentence-transformers`
   requires. Rather than let the whole app crash, a deterministic,
@@ -123,7 +138,7 @@ relevant is found - directly addressing minimum feature #7.
 
 ## 4. Testing
 
-- 70 automated `pytest` tests (81% code coverage, measured with
+- 79 automated `pytest` tests (82% code coverage, measured with
   `pytest-cov`) across `test_rag_pipeline.py`, `test_auth.py`,
   `test_feedback.py`, `test_api.py`, `test_ocr.py`, `test_vector_store.py`,
   `test_llm_provider.py`, and `test_app.py` - covering file validation,
@@ -135,7 +150,10 @@ relevant is found - directly addressing minimum feature #7.
   the exact threshold), OCR (both the graceful-degradation path and, where
   Tesseract is installed, real end-to-end text recognition), atomic/locked
   vector store persistence (including a genuine cross-process lock
-  timeout), LLM retry/fallback behavior, and the Streamlit UI itself via
+  timeout), LLM retry/fallback behavior, the LangChain-vs-fallback
+  branching in both `chunk_documents()` and every provider caller
+  (verified with a real end-to-end Groq call through `ChatGroq`, plus
+  `sys.modules`-mocked fallback paths), and the Streamlit UI itself via
   `streamlit.testing.v1.AppTest` (empty state, badges, chat flow, the full
   login gate) - all passing, fully offline. The same
   suite now runs in CI on every push.
@@ -171,11 +189,19 @@ relevant is found - directly addressing minimum feature #7.
 - The login system is intentionally minimal (PBKDF2 + a JSON file, no
   sessions/cookies beyond Streamlit's own state) - adequate for a
   single-instance course project, not a production identity provider.
-- Overall test coverage is 81% (measured with `pytest-cov`, not just
+- Overall test coverage is 82% (measured with `pytest-cov`, not just
   estimated) - the remaining gaps are concentrated in `embeddings.py`'s
   `SentenceTransformerEmbedder` class (only exercised indirectly through
   integration tests, not unit-tested in isolation) and `text_splitter.py`'s
-  edge cases (very short/empty input, single-character splitting).
+  edge cases (very short/empty input, single-character splitting) - both
+  now fallback-only code paths, exercised less directly than the primary
+  LangChain/Sentence-Transformers paths they back up.
+- No live public deployment (e.g. Streamlit Community Cloud). This was a
+  deliberate choice, not an oversight: deploying a private GitHub repo to
+  Streamlit Cloud requires authorizing its GitHub App with broad "all
+  public and private repositories" access, which was reviewed and
+  declined for this repo. The app runs correctly locally and via Docker
+  (see above); it is not hosted at a public URL.
 
 **Closed in this pass** (previously listed as limitations): OCR's real
 text-recognition accuracy was unverified - Tesseract has since been

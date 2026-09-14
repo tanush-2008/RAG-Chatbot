@@ -89,9 +89,9 @@ MP3/
 |-- rag_pipeline.py         # Orchestrates extraction -> chunking -> retrieval -> answer
 |-- document_loader.py      # Module 1 & 2: upload validation + PDF text extraction
 |-- vector_store.py         # Module 3 & 4: chunking + FAISS-backed vector store (atomic, locked)
-|-- text_splitter.py        # Dependency-free recursive character text splitter
+|-- text_splitter.py        # Fallback recursive character splitter (primary: langchain-text-splitters)
 |-- embeddings.py           # Sentence Transformers wrapper + offline fallback
-|-- llm_provider.py         # Groq / OpenAI / Gemini abstraction + retry/fallback + condensing
+|-- llm_provider.py         # Groq / OpenAI / Gemini via LangChain + retry/fallback + condensing
 |-- prompt.py               # Module 6: grounded-answer system prompt / guardrail
 |-- logging_config.py       # Shared backend logging setup
 |-- auth.py                 # Optional: login gate + per-user document isolation
@@ -237,10 +237,12 @@ Run with coverage:
 python -m pytest tests/ --cov=. --cov-report=term-missing
 ```
 
-70 tests (81% overall coverage) cover the core pipeline, question splitting,
+79 tests (82% overall coverage) cover the core pipeline, question splitting,
 source deduplication, text normalization, corrupted/non-PDF upload
 rejection, atomic/locked vector store persistence, LLM retry and
-provider-fallback behavior, API rate limiting (including genuine 429
+provider-fallback behavior, the LangChain-vs-fallback branching for both
+chunking and every LLM provider call (`test_vector_store.py`,
+`test_llm_provider.py`), API rate limiting (including genuine 429
 enforcement), the login gate and password hashing, feedback logging, the
 FastAPI backend, real OCR text recognition (`test_real_ocr_recognizes_text`,
 skipped rather than failed where Tesseract isn't installed), and the
@@ -301,7 +303,7 @@ under real daily use rather than just a demo:
   always exempt so liveness probes are never throttled. Genuinely verified
   (not just wired up): tests confirm the exact request that should return
   HTTP 429 does, and the one just before it doesn't.
-- **Measured test coverage**: 81% overall (`pytest --cov`), including the
+- **Measured test coverage**: 82% overall (`pytest --cov`), including the
   Streamlit UI itself via `streamlit.testing.v1.AppTest` (`tests/test_app.py`)
   - the empty state, status badges, chat flow, and the full login gate
     (wrong password rejected, correct login reveals the app) all run for
