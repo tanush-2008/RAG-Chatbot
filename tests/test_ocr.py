@@ -1,10 +1,11 @@
 """Tests for the optional OCR extension (ocr.py, document_loader.py's enable_ocr).
 
-Tesseract isn't installed in this dev environment, so these tests verify
-the graceful-degradation path (no crash, pages skipped exactly as without
-OCR) rather than actual text recognition - that path only differs once a
-real Tesseract install makes ocr.is_available() return True, which the
-image-only PDF fixture below is built to exercise if it ever is.
+Most of these tests verify the graceful-degradation path (no crash, pages
+skipped exactly as without OCR) since Tesseract isn't installed in every
+environment this runs in (e.g. CI). Where a real Tesseract install is
+detected, `test_real_ocr_recognizes_text` additionally exercises genuine
+text recognition end-to-end instead of just the plumbing - skipped
+automatically (not failed) where Tesseract is unavailable.
 """
 
 from __future__ import annotations
@@ -88,3 +89,27 @@ def test_ocr_pdf_page_marks_via_ocr_when_available(monkeypatch):
     assert len(pages) == 1
     assert pages[0].text == "Recognized text"
     assert pages[0].via_ocr is True
+
+
+@pytest.mark.skipif(not ocr.is_available(), reason="Tesseract not installed in this environment")
+def test_real_ocr_recognizes_text():
+    """End-to-end with the actual Tesseract engine (skipped, not failed,
+    where it isn't installed) - verifies genuine text recognition, not just
+    the graceful-degradation/plumbing paths the other tests cover."""
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.pdfgen import canvas
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (900, 200), color="white")
+    ImageDraw.Draw(img).text((20, 60), "Employees get 12 days of Casual Leave per year.", fill="black")
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=LETTER)
+    c.drawInlineImage(img, 50, 650, width=500, height=110)
+    c.showPage()
+    c.save()
+
+    pages = extract_pages(buf.getvalue(), "scanned_real.pdf", enable_ocr=True)
+    assert len(pages) == 1
+    assert pages[0].via_ocr is True
+    assert "12 days of Casual Leave" in pages[0].text
+    assert "employees" in pages[0].text.lower()

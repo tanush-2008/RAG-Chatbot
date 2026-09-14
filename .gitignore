@@ -11,3 +11,5 @@ vector_store/saved_index/**/*.tmp
 .pytest_cache/
 feedback/
 users.json
+.coverage
+htmlcov/

@@ -51,9 +51,9 @@ grid-style source citation cards.
 | Conversation memory for follow-ups | `llm_provider.condense_question()`, wired through `app.py`'s chat history |
 | Multiple documents + search filters | `vector_store.py`'s `allowed_documents`, the sidebar "Search scope" multiselect |
 | Feedback buttons (👍/👎) | `feedback.py`, logged to `feedback/feedback_log.jsonl` |
-| FastAPI backend for other clients | `api.py` - `/health`, `/documents`, `/ask` |
+| FastAPI backend for other clients | `api.py` - `/health`, `/documents`, `/ask`, with per-route rate limiting |
 | User login + document isolation | `auth.py`, `tools/manage_users.py` - opt-in, no prompt until you create an account |
-| OCR for scanned PDFs | `ocr.py` - opt-in checkbox, degrades gracefully without Tesseract installed |
+| OCR for scanned PDFs | `ocr.py` - opt-in checkbox; verified with real Tesseract text recognition, degrades gracefully without it |
 | Docker deployment | `Dockerfile`, `docker-compose.yml` |
 | Evaluation against a QA dataset | `tests/evaluate.py` against `tests/test_questions.csv` |
 
@@ -85,7 +85,7 @@ flowchart TD
 ```
 MP3/
 |-- app.py                  # Streamlit UI (Module 7) + login gate, filters, feedback
-|-- api.py                  # Optional: FastAPI backend for other clients
+|-- api.py                  # Optional: FastAPI backend for other clients + rate limiting
 |-- rag_pipeline.py         # Orchestrates extraction -> chunking -> retrieval -> answer
 |-- document_loader.py      # Module 1 & 2: upload validation + PDF text extraction
 |-- vector_store.py         # Module 3 & 4: chunking + FAISS-backed vector store (atomic, locked)
@@ -115,6 +115,7 @@ MP3/
     |-- evaluate.py             # Automated grading against test_questions.csv
     |-- evaluation_results.csv  # A checked-in real run: 19/19 (100%)
     |-- test_rag_pipeline.py    # Core pipeline tests
+    |-- test_app.py             # Streamlit UI tests (streamlit.testing.v1.AppTest)
     |-- test_auth.py, test_feedback.py, test_api.py, test_ocr.py
     `-- test_vector_store.py, test_llm_provider.py
 ```
@@ -189,9 +190,14 @@ Tick "Enable OCR for scanned pages" in the sidebar. This requires the
 Tesseract OCR engine installed separately on your machine (not a pip
 package):
 
-- Windows: installer at https://github.com/UB-Mannheim/tesseract/wiki
+- Windows: `winget install --id UB-Mannheim.TesseractOCR -e`, or the
+  installer at https://github.com/UB-Mannheim/tesseract/wiki
 - macOS: `brew install tesseract`
 - Linux: `apt-get install tesseract-ocr`
+
+The official Windows installer doesn't reliably add Tesseract to `PATH` -
+`ocr.py` checks common install locations automatically, or set
+`TESSERACT_CMD` in `.env` to the full path if it's installed somewhere else.
 
 Without Tesseract installed, the checkbox is harmless - scanned pages are
 skipped exactly as they are today, with a warning shown in the sidebar.
@@ -210,10 +216,11 @@ docker build -t rag-chatbot .
 docker run -p 8501:8501 --env-file .env -v rag_data:/app/vector_store/saved_index rag-chatbot
 ```
 
-Note: Docker isn't installed on the machine this was built on, so the
-Dockerfile/Compose setup is written carefully against documented syntax but
-hasn't been build-tested here - please report an issue if something doesn't
-build cleanly.
+Note: the Dockerfile passes `hadolint` (a standalone Dockerfile linter) with
+zero findings, but an actual `docker build`/`docker run` hasn't been
+completed on the machine this was built on - Docker Desktop's backend needs
+WSL2, which isn't set up there (an OS-level, admin+reboot change, not a
+project issue). Please report an issue if something doesn't build cleanly.
 
 ## Testing
 
@@ -224,11 +231,22 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
-58 tests cover the core pipeline, question splitting, source deduplication,
-text normalization, corrupted/non-PDF upload rejection, atomic/locked vector
-store persistence, LLM retry and provider-fallback behavior, the login gate
-and password hashing, feedback logging, the FastAPI backend, and the OCR
-fallback's graceful degradation. The same suite runs in CI on every push
+Run with coverage:
+
+```bash
+python -m pytest tests/ --cov=. --cov-report=term-missing
+```
+
+70 tests (81% overall coverage) cover the core pipeline, question splitting,
+source deduplication, text normalization, corrupted/non-PDF upload
+rejection, atomic/locked vector store persistence, LLM retry and
+provider-fallback behavior, API rate limiting (including genuine 429
+enforcement), the login gate and password hashing, feedback logging, the
+FastAPI backend, real OCR text recognition (`test_real_ocr_recognizes_text`,
+skipped rather than failed where Tesseract isn't installed), and the
+Streamlit UI itself via `streamlit.testing.v1.AppTest`
+(`tests/test_app.py` - empty state, badges, chat flow, and the full login
+flow). The same suite runs in CI on every push
 (`.github/workflows/tests.yml`).
 
 `tests/test_questions.csv` is a 19-question evaluation sheet covering
@@ -276,6 +294,18 @@ under real daily use rather than just a demo:
 - **Feedback insights in the UI**: the 👍/👎 data `feedback.py` already
   collected is now surfaced live in the sidebar (helpful/not-helpful counts,
   helpful rate) instead of sitting unused in a log file.
+- **API rate limiting** (`api.py`, via `slowapi`): `/ask` and
+  `/documents/upload` have their own tighter per-IP limits (the expensive
+  endpoints - an LLM call costs real money, uploads cost disk/CPU); every
+  other route falls under a configurable blanket default; `/health` is
+  always exempt so liveness probes are never throttled. Genuinely verified
+  (not just wired up): tests confirm the exact request that should return
+  HTTP 429 does, and the one just before it doesn't.
+- **Measured test coverage**: 81% overall (`pytest --cov`), including the
+  Streamlit UI itself via `streamlit.testing.v1.AppTest` (`tests/test_app.py`)
+  - the empty state, status badges, chat flow, and the full login gate
+    (wrong password rejected, correct login reveals the app) all run for
+    real in a simulated harness, not just imported and hoped to work.
 
 ## Responsible AI & Security
 

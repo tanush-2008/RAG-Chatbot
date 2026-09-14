@@ -22,15 +22,31 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile
 from filelock import Timeout
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 from document_loader import DocumentValidationError
 from logging_config import get_logger
 from rag_pipeline import RAGPipeline
 
 log = get_logger(__name__)
+
+# Rate limits are configurable via env vars so a real deployment can tune
+# them without a code change; defaults are generous for local/dev use.
+# /ask and /documents/upload get their own (tighter) limits since they're
+# the expensive ones - an LLM call costs real money per request, and
+# uploads consume disk/CPU - while everything else falls under the
+# DEFAULT_RATE_LIMIT blanket via Limiter's default_limits.
+DEFAULT_RATE_LIMIT = os.getenv("DEFAULT_RATE_LIMIT", "100/minute")
+ASK_RATE_LIMIT = os.getenv("ASK_RATE_LIMIT", "20/minute")
+UPLOAD_RATE_LIMIT = os.getenv("UPLOAD_RATE_LIMIT", "10/minute")
+
+limiter = Limiter(key_func=get_remote_address, default_limits=[DEFAULT_RATE_LIMIT])
 
 
 def _save_pipeline() -> None:
@@ -47,8 +63,11 @@ VECTOR_STORE_DIR = Path("vector_store/saved_index/api")
 app = FastAPI(
     title="Domain-Specific RAG Chatbot API",
     description="REST API for uploading PDFs and asking grounded questions about them.",
-    version="1.1.0",
+    version="1.2.0",
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 pipeline = RAGPipeline()
 if (VECTOR_STORE_DIR / "index.faiss").exists():
@@ -91,6 +110,7 @@ class ProcessResponse(BaseModel):
 
 
 @app.get("/health")
+@limiter.exempt
 def health() -> dict:
     return {"status": "ok"}
 
@@ -117,8 +137,9 @@ def clear_documents() -> dict:
 
 
 @app.post("/documents/upload", response_model=ProcessResponse, dependencies=[Depends(require_api_key)])
+@limiter.limit(UPLOAD_RATE_LIMIT)
 async def upload_documents(
-    files: list[UploadFile], enable_ocr: bool = Form(False)
+    request: Request, files: list[UploadFile], enable_ocr: bool = Form(False)
 ) -> ProcessResponse:
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded.")
@@ -144,12 +165,13 @@ async def upload_documents(
 
 
 @app.post("/ask", response_model=AskResponse, dependencies=[Depends(require_api_key)])
-def ask(request: AskRequest) -> AskResponse:
+@limiter.limit(ASK_RATE_LIMIT)
+def ask(request: Request, body: AskRequest) -> AskResponse:
     original_top_k = pipeline.top_k
-    if request.top_k:
-        pipeline.top_k = request.top_k
+    if body.top_k:
+        pipeline.top_k = body.top_k
     try:
-        answer = pipeline.ask(request.question)
+        answer = pipeline.ask(body.question)
     finally:
         pipeline.top_k = original_top_k
 

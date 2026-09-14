@@ -16,6 +16,7 @@ filelock==3.32.6
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
 python-multipart==0.0.32
+slowapi==0.1.10
 
 # Optional advanced feature: OCR for scanned PDFs (ocr.py). Also requires the
 # Tesseract OCR engine installed separately on the host - see ocr.py.

@@ -23,13 +23,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 RUN mkdir -p vector_store/saved_index feedback && \
-    useradd --create-home --shell /bin/bash appuser && \
+    useradd --create-home --shell /bin/bash --uid 1000 appuser && \
     chown -R appuser:appuser /app
-USER appuser
+USER 1000:1000
 
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD \
-    python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" || exit 1
+    ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
 
 ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]

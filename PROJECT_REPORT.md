@@ -123,18 +123,21 @@ relevant is found - directly addressing minimum feature #7.
 
 ## 4. Testing
 
-- 58 automated `pytest` tests across `test_rag_pipeline.py`, `test_auth.py`,
+- 70 automated `pytest` tests (81% code coverage, measured with
+  `pytest-cov`) across `test_rag_pipeline.py`, `test_auth.py`,
   `test_feedback.py`, `test_api.py`, `test_ocr.py`, `test_vector_store.py`,
-  and `test_llm_provider.py` - covering file validation, text extraction
-  with metadata, corrupted/non-PDF-content upload rejection, text
-  normalization, indexing, retrieval and sourcing, refusal behavior,
-  question-batch splitting, source deduplication, login/password hashing
-  and per-user isolation, feedback logging, the FastAPI endpoints
-  (including its API-key gate), the OCR fallback's graceful degradation
-  (verified both with Tesseract genuinely absent, and via a
-  simulated-available case that exercises the real plumbing), atomic/locked
-  vector store persistence (including a genuine cross-process lock timeout),
-  and LLM retry/fallback behavior - all passing, fully offline. The same
+  `test_llm_provider.py`, and `test_app.py` - covering file validation,
+  text extraction with metadata, corrupted/non-PDF-content upload
+  rejection, text normalization, indexing, retrieval and sourcing, refusal
+  behavior, question-batch splitting, source deduplication, login/password
+  hashing and per-user isolation, feedback logging, the FastAPI endpoints
+  (API-key gate and rate limiting, with genuine HTTP 429 verification at
+  the exact threshold), OCR (both the graceful-degradation path and, where
+  Tesseract is installed, real end-to-end text recognition), atomic/locked
+  vector store persistence (including a genuine cross-process lock
+  timeout), LLM retry/fallback behavior, and the Streamlit UI itself via
+  `streamlit.testing.v1.AppTest` (empty state, badges, chat flow, the full
+  login gate) - all passing, fully offline. The same
   suite now runs in CI on every push.
 - A 19-question evaluation sheet (`tests/test_questions.csv`) covers
   correct, incorrect, and prompt-injection questions across both sample
@@ -156,17 +159,32 @@ relevant is found - directly addressing minimum feature #7.
   keyword/synonym overlap matters more than true semantic similarity. On any
   environment where `torch` loads normally (a typical laptop, Streamlit
   Cloud, Docker), the real model is used automatically.
-- OCR requires the Tesseract binary installed separately (not pip-
-  installable); without it, the feature degrades to the pre-OCR behavior.
-  Actual text-recognition accuracy hasn't been verified end-to-end on this
-  machine since Tesseract isn't installed here - only the graceful-
-  degradation and plumbing paths were testable.
-- The Docker setup (`Dockerfile`, `docker-compose.yml`) was written
-  carefully but not build-tested, since Docker isn't installed on this
-  machine.
+- The Docker setup (`Dockerfile`, `docker-compose.yml`) passes `hadolint`
+  (a standalone Dockerfile linter) with zero findings, but an actual
+  `docker build`/`docker run` was not completed - Docker Desktop was
+  installed specifically to test this, but its backend requires WSL2,
+  which isn't registered on this Windows machine (`wsl --status` returns
+  `REGDB_E_CLASSNOTREG`) - fixing that needs an admin-elevated command and
+  a reboot, outside what this session could do. The Dockerfile itself was
+  fixed based on real lint findings (a non-numeric UID and shell-form
+  HEALTHCHECK, both flagged by `hadolint` and corrected).
 - The login system is intentionally minimal (PBKDF2 + a JSON file, no
   sessions/cookies beyond Streamlit's own state) - adequate for a
   single-instance course project, not a production identity provider.
+- Overall test coverage is 81% (measured with `pytest-cov`, not just
+  estimated) - the remaining gaps are concentrated in `embeddings.py`'s
+  `SentenceTransformerEmbedder` class (only exercised indirectly through
+  integration tests, not unit-tested in isolation) and `text_splitter.py`'s
+  edge cases (very short/empty input, single-character splitting).
+
+**Closed in this pass** (previously listed as limitations): OCR's real
+text-recognition accuracy was unverified - Tesseract has since been
+installed and end-to-end recognition confirmed
+(`tests/test_ocr.py::test_real_ocr_recognizes_text`); the FastAPI backend
+had no rate limiting - `/ask` and `/documents/upload` now have per-IP
+limits, genuinely verified to return HTTP 429 at the right threshold; and
+test coverage was unmeasured - it's now tracked at 81%, including the
+Streamlit UI itself via `AppTest` (previously 0%, untested).
 
 ## 6. Deliverables Checklist
 
@@ -189,9 +207,9 @@ relevant is found - directly addressing minimum feature #7.
 |---|---|
 | Multiple document collections and filters | Done - sidebar "Search scope" multiselect |
 | Conversation memory for follow-up questions | Done - history-aware query condensing |
-| OCR support for scanned PDFs | Done - opt-in, graceful degradation without Tesseract |
-| FastAPI backend for mobile/web clients | Done - `api.py` |
+| OCR support for scanned PDFs | Done - real text recognition verified end-to-end |
+| FastAPI backend for mobile/web clients | Done - `api.py`, with rate limiting |
 | User login and document access control | Done - `auth.py`, per-user isolation |
-| Feedback buttons for useful/incorrect answers | Done - `feedback.py` |
-| Docker deployment | Done - not build-tested (see Limitations) |
+| Feedback buttons for useful/incorrect answers | Done - `feedback.py`, surfaced in the UI |
+| Docker deployment | Done - Dockerfile lint-clean; build/run untested (see Limitations) |
 | Evaluation using a prepared QA dataset | Done - `tests/evaluate.py`, 19/19 (100%) |

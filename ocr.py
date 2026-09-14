@@ -16,12 +16,42 @@ Setup (only needed to actually use OCR):
 
 from __future__ import annotations
 
+import os
+import shutil
+
 from logging_config import get_logger
 
 log = get_logger(__name__)
 
 _tesseract_checked = False
 _tesseract_available = False
+
+# Common Windows install locations for Tesseract that the official installer
+# does NOT reliably add to PATH - a well-known gotcha that otherwise makes a
+# genuine local install look "not available" to this module.
+_WINDOWS_FALLBACK_PATHS = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
+
+
+def _locate_tesseract_binary() -> str | None:
+    """Find the Tesseract executable even if it isn't on PATH.
+
+    Checks PATH first (the normal case, e.g. Linux/Mac package managers),
+    then an explicit TESSERACT_CMD override, then common Windows install
+    locations the official installer leaves off PATH by default.
+    """
+    on_path = shutil.which("tesseract")
+    if on_path:
+        return on_path
+    explicit = os.getenv("TESSERACT_CMD")
+    if explicit and os.path.isfile(explicit):
+        return explicit
+    for candidate in _WINDOWS_FALLBACK_PATHS:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
 
 
 def is_available() -> bool:
@@ -31,9 +61,12 @@ def is_available() -> bool:
         try:
             import pytesseract
 
+            binary = _locate_tesseract_binary()
+            if binary:
+                pytesseract.pytesseract.tesseract_cmd = binary
             version = pytesseract.get_tesseract_version()
             _tesseract_available = True
-            log.info("Tesseract OCR engine available (version %s).", version)
+            log.info("Tesseract OCR engine available (version %s, at %s).", version, binary or "PATH")
         except Exception as exc:
             _tesseract_available = False
             log.info("Tesseract OCR engine not available (%s); OCR will be skipped.", exc)

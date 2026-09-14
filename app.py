@@ -20,7 +20,7 @@ from document_loader import DocumentValidationError, MAX_FILE_SIZE_MB
 from feedback import feedback_summary, log_feedback
 from rag_pipeline import RAGPipeline
 
-BASE_VECTOR_STORE_DIR = Path("vector_store/saved_index")
+BASE_VECTOR_STORE_DIR = Path(os.getenv("VECTOR_STORE_DIR") or "vector_store/saved_index")
 
 EXAMPLE_QUESTIONS = [
     "📋 Summarize this document",

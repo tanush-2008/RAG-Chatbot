@@ -25,6 +25,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "pipeline", RAGPipeline())
     monkeypatch.setattr(api, "VECTOR_STORE_DIR", tmp_path / "api_store")
     monkeypatch.delenv("API_KEY", raising=False)
+    # Rate-limit counters live in the module-level `limiter`'s storage, not
+    # per-TestClient - reset them so tests don't pollute each other's counts
+    # (the limit-enforcement tests below need a clean starting point too).
+    api.limiter.reset()
     return TestClient(api.app)
 
 
@@ -109,3 +113,33 @@ def test_health_bypasses_api_key(client, monkeypatch):
     monkeypatch.setenv("API_KEY", "secret123")
     response = client.get("/health")
     assert response.status_code == 200
+
+
+def test_ask_rate_limit_enforced(client):
+    # ASK_RATE_LIMIT defaults to 20/minute (see api.py); the 21st request in
+    # the same window must be rejected with 429, not silently accepted.
+    client.post("/documents/upload", files=_sample_files())
+    responses = [client.post("/ask", json={"question": "test"}) for _ in range(21)]
+    assert responses[-1].status_code == 429
+    assert all(r.status_code == 200 for r in responses[:20])
+
+
+def test_upload_rate_limit_enforced(client):
+    # UPLOAD_RATE_LIMIT defaults to 10/minute.
+    responses = [client.post("/documents/upload", files=_sample_files()) for _ in range(11)]
+    assert responses[-1].status_code == 429
+    assert all(r.status_code == 200 for r in responses[:10])
+
+
+def test_default_rate_limit_applies_to_undecorated_routes(client):
+    # /documents has no explicit @limiter.limit() - it should still be
+    # covered by DEFAULT_RATE_LIMIT (100/minute) via SlowAPIMiddleware.
+    responses = [client.get("/documents") for _ in range(101)]
+    assert responses[-1].status_code == 429
+    assert all(r.status_code == 200 for r in responses[:100])
+
+
+def test_health_is_exempt_from_rate_limiting(client):
+    # Monitoring/liveness probes must never be throttled.
+    responses = [client.get("/health") for _ in range(150)]
+    assert all(r.status_code == 200 for r in responses)
